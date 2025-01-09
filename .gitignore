@@ -1,0 +1,6 @@
+# Editors
+.vscode/
+
+# Rust
+debug/
+target/
