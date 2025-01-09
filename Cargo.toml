@@ -3,6 +3,7 @@
 resolver = "2"
 members = [
     "mixlib",
+    "mixfmt",
 ]
 
 package.authors = ["John Hunter Kohler <jhunterkohler@gmail.com>"]
