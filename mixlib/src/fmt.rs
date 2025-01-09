@@ -24,13 +24,13 @@ impl CodeFormatter {
 
     /// Format MIX assembly.
     pub fn format_code(&self, src: &str, dest: &mut String) {
-        dest.reserve(src.len().saturating_sub(dest.len()));
-
         for line in src.lines() {
             if line.starts_with('*') {
-                *dest += line;
+                dest.push_str(line);
             } else if let Some(captures) = self.line_regex.captures(line) {
                 unsafe { self.format_captures(&captures, dest) };
+            } else {
+                dest.push_str(line);
             }
 
             dest.push('\n');
@@ -39,11 +39,14 @@ impl CodeFormatter {
 
     unsafe fn format_captures(&self, captures: &Captures, dest: &mut String) {
         let loc = captures.name("loc").map_or("", |m| m.as_str());
-        let op = captures.name("op").map(|m| m.as_str()).unwrap_unchecked();
-        let after_op =
-            captures.name("after_op").map(|m| m.as_str()).unwrap_unchecked();
+        let op = captures.name("op").map(|m| m.as_str()).unwrap();
+        let after_op = captures.name("after_op").map(|m| m.as_str()).unwrap();
 
-        write!(dest, "{loc:10} {op:4} {after_op}").unwrap_unchecked()
+        if after_op.is_empty() {
+            write!(dest, "{loc:10} {op}").unwrap();
+        } else {
+            write!(dest, "{loc:10} {op:4} {after_op}").unwrap();
+        }
     }
 }
 
@@ -102,7 +105,8 @@ mod test {
             "TAG ORIG 3000\n",
             "*     Another comment line.\n",
             " ORIG    3000 Comment.\n",
-            "2H     INC1  3 Another comment."
+            "2H     INC1  3 Another comment. \n",
+            "  HLT   "
         );
 
         const FORMATTED: &str = concat!(
@@ -111,7 +115,8 @@ mod test {
             "TAG        ORIG 3000\n",
             "*     Another comment line.\n",
             "           ORIG 3000 Comment.\n",
-            "2H         INC1 3 Another comment.\n"
+            "2H         INC1 3 Another comment.\n",
+            "           HLT\n"
         );
 
         assert_eq!(format_code_to_string(UNFORMATTED), FORMATTED);
