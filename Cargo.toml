@@ -4,3 +4,6 @@ resolver = "2"
 members = [
     "mixlib",
 ]
+
+package.authors = ["John Hunter Kohler <jhunterkohler@gmail.com>"]
+package.keywords = ["assembly", "asm", "mix", "mixal"]
