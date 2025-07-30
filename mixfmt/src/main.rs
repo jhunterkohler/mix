@@ -86,7 +86,7 @@ fn main() {
         check_io_result(format_stdin(&args));
     } else {
         for path in &args.files {
-            check_io_result(format_file(&args, &path));
+            check_io_result(format_file(&args, path));
         }
     }
 }
