@@ -1,6 +1,6 @@
 [package]
 name = "mixfmt"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 readme = "Readme.md"
 license = "MIT"
@@ -9,7 +9,7 @@ description = "MIXAL formatting"
 
 [dependencies]
 clap = { version = "4.5.24", features = ["derive"] }
-mixlib = { version = "0.3.0", path = "../mixlib" }
+mixlib = { version = "0.4.0", path = "../mixlib" }
 
 [dev-dependencies]
 assert_cmd = "2.0.16"

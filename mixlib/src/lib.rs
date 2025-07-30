@@ -4,3 +4,7 @@
 //! computer architecture and MIXAL (the MIX assembly language).
 
 pub mod fmt;
+pub mod num;
+
+#[cfg(not(any(target_pointer_width = "32", target_pointer_width = "64")))]
+compile_error!("'target_pointer_width' must be '32' or '64'");
