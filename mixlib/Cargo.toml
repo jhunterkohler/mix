@@ -1,11 +1,10 @@
 [package]
 name = "mixlib"
-version = "0.2.1"
-edition = "2021"
+version = "0.3.0"
+edition = "2024"
 readme = "Readme.md"
 license = "MIT"
 repository = "https://github.com/jhunterkohler/mix/tree/master/mixlib"
 description = "MIX architecture utilities"
 
-[dependencies]
-regex = "1.11.1"
+[dev-dependencies]

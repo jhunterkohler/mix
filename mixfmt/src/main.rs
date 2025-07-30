@@ -3,11 +3,15 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process;
 
-use clap::{arg, Parser};
+use clap::{Parser, arg};
 use mixlib::fmt::format_code_to_string;
 
 #[derive(Parser, Debug)]
-#[command(version, disable_help_subcommand(true))]
+#[command(
+    version,
+    disable_help_subcommand(true),
+    about = "Format MIX assembly code."
+)]
 struct Args {
     #[arg(
         help = "Files to format. If no files are specified, standard input is \

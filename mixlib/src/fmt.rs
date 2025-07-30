@@ -1,53 +1,90 @@
-//! Code formatting.
-use std::{fmt::Write, sync::LazyLock};
+//! MIX code formatting.
+use std::iter::repeat_n;
 
-use regex::{Captures, Regex};
-
-/// A type storing prepared data to improve code formatting speed.
+/// Finds offset of first whitespace character at an index greater than or
+/// equal to `start`, or returns `s.len()` if no such character exists.
 ///
-/// A static instance of [CodeFormatter] is used by the global [format_code].
-/// Aquiring this global instance, however, requires thread safety which a
-/// single local instance would not.
-pub struct CodeFormatter {
-    line_regex: Regex,
+/// # Safety
+///
+/// * `start` must be on a valid byte boundary.
+/// * `start` must be <= s.len()
+unsafe fn find_ws(s: &str, start: usize) -> usize {
+    // SAFETY: `start..` is valid index by function preconditions.
+    unsafe { s.get_unchecked(start..) }
+        .find(char::is_whitespace)
+        .map(|index| index + start)
+        .unwrap_or(s.len())
 }
 
-impl CodeFormatter {
-    /// Create a new formatter.
-    pub fn new() -> CodeFormatter {
-        let line_regex =
-            Regex::new(r"^(?<loc>\S+)?\s+(?<op>\S+)\s*(?<after_op>.*?)\s*$")
-                .unwrap();
+/// Finds offset of first whitespace character at an index greater than or
+/// equal to `start`, or returns `s.len()` if no such character exists.
+///
+/// # Safety
+///
+/// * `start` must be on a valid byte boundary.
+/// * `start` must be <= s.len()
+unsafe fn find_non_ws(s: &str, start: usize) -> usize {
+    // SAFETY: `start..` is valid index by function preconditions.
+    unsafe { s.get_unchecked(start..) }
+        .find(|c: char| !c.is_whitespace())
+        .map(|index| index + start)
+        .unwrap_or(s.len())
+}
 
-        Self { line_regex }
+/// Get parts of line to format: the loc, op, and address/comment portions.
+fn line_parts(line: &str) -> (&str, &str, &str) {
+    // SAFETY: Each call to `find_ws` and `find_non_ws` upholds character
+    // boundary preconditions for valid string indexes and slices into `line`.
+    unsafe {
+        let loc_end = find_ws(line, 0);
+        let op_start = find_non_ws(line, loc_end);
+        let op_end = find_ws(line, op_start);
+        let after_op_start = find_non_ws(line, op_end);
+
+        (
+            line.get_unchecked(..loc_end),
+            line.get_unchecked(op_start..op_end),
+            line.get_unchecked(after_op_start..),
+        )
+    }
+}
+
+/// Format line containing code that is nonempty and end-trimmed.
+fn format_line(line: &str, dest: &mut String) {
+    debug_assert!(line.trim_end() == line);
+    debug_assert!(!line.is_empty());
+
+    let (loc, op, after_op) = line_parts(line);
+
+    dest.push_str(loc);
+
+    // If `op` is empty, then `after_op` must also be, and we are done.
+    if op.is_empty() {
+        return;
     }
 
-    /// Format MIX assembly.
-    pub fn format_code(&self, src: &str, dest: &mut String) {
-        for line in src.lines() {
-            if line.starts_with('*') {
-                dest.push_str(line);
-            } else if let Some(captures) = self.line_regex.captures(line) {
-                unsafe { self.format_captures(&captures, dest) };
-            } else {
-                dest.push_str(line);
-            }
-
-            dest.push('\n');
-        }
+    // Pad `loc` to 10 characters with spaces and add one separation space.
+    if loc.len() < 10 {
+        dest.extend(repeat_n(' ', 11 - loc.len()));
+    } else {
+        dest.push(' ');
     }
 
-    unsafe fn format_captures(&self, captures: &Captures, dest: &mut String) {
-        let loc = captures.name("loc").map_or("", |m| m.as_str());
-        let op = captures.name("op").map(|m| m.as_str()).unwrap();
-        let after_op = captures.name("after_op").map(|m| m.as_str()).unwrap();
+    dest.push_str(op);
 
-        if after_op.is_empty() {
-            write!(dest, "{loc:10} {op}").unwrap();
-        } else {
-            write!(dest, "{loc:10} {op:4} {after_op}").unwrap();
-        }
+    // We are done if nothing after `op`.
+    if after_op.is_empty() {
+        return;
     }
+
+    // Pad `op` to 4 characters with spaces and add one separation space.
+    if op.len() < 4 {
+        dest.extend(repeat_n(' ', 5 - op.len()));
+    } else {
+        dest.push(' ');
+    }
+
+    dest.push_str(after_op);
 }
 
 /// Format MIX assembly.
@@ -61,64 +98,73 @@ impl CodeFormatter {
 /// ```
 /// use mixlib::fmt::format_code;
 ///
-/// let mut dest = "* comment line\n".to_string();
+/// let mut dest = "* COMMENT LINE\n".to_string();
+/// format_code("L EQU 500    comment\n\n", &mut dest);
 ///
-/// format_code("L EQU 500    comment", &mut dest);
-/// assert_eq!(&dest, "* comment line\nL          EQU  500    comment\n");
+/// assert_eq!(&dest, "* COMMENT LINE\nL          EQU  500    comment\n");
 /// ```
 pub fn format_code(src: &str, dest: &mut String) {
-    const CODE_FORMATTER: LazyLock<CodeFormatter> =
-        LazyLock::new(|| CodeFormatter::new());
+    let src = src.trim();
+    let mut last_empty = false;
 
-    CODE_FORMATTER.format_code(src, dest)
+    for line in src.lines().map(str::trim_end) {
+        if line.is_empty() {
+            if !last_empty {
+                dest.push('\n');
+                last_empty = true;
+            }
+        } else if line.starts_with('*') {
+            dest.push_str(line);
+            dest.push('\n');
+            last_empty = false;
+        } else {
+            format_line(line, dest);
+            dest.push('\n');
+            last_empty = false;
+        }
+    }
 }
 
-/// Format MIX assembly into a new string.
-///
-/// # Examples
-///
-/// Basic usage:
-///
-/// ```
-/// use mixlib::fmt::format_code_to_string;
-///
-/// assert_eq!(
-///     format_code_to_string("L EQU 500    comment"),
-///     "L          EQU  500    comment\n"
-/// );
-/// ```
 pub fn format_code_to_string(src: &str) -> String {
     let mut dest = String::new();
     format_code(src, &mut dest);
-    return dest;
+    dest
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
+
+    const UNFORMATTED: &str = concat!(
+        "\n\n",
+        "* COMMENT LINE  \n",
+        "A  \n",
+        "A EQU  \n",
+        "ABCDEFGHJK    EQU  \n",
+        "ABCDEFGHJKL    EQU  \n",
+        "ABCDEFGHJKL    EQU    AFTER  \n",
+        "ABCDEFGHJKL    ORIG    AFTER \n",
+        "ABCDEFGHJKL    ABCDE    AFTER  \n",
+        "\n\n",
+        "* COMMENT LINE\n",
+        "\n\n",
+    );
+
+    const FORMATTED: &str = concat!(
+        "* COMMENT LINE\n",
+        "A\n",
+        "A          EQU\n",
+        "ABCDEFGHJK EQU\n",
+        "ABCDEFGHJKL EQU\n",
+        "ABCDEFGHJKL EQU  AFTER\n",
+        "ABCDEFGHJKL ORIG AFTER\n",
+        "ABCDEFGHJKL ABCDE AFTER\n",
+        "\n",
+        "* COMMENT LINE\n",
+    );
 
     #[test]
     fn format_code_follows_style() {
-        const UNFORMATTED: &str = concat!(
-            "*     Comment line.\n",
-            "L EQU   500           Comment. \n",
-            "TAG ORIG 3000\n",
-            "*     Another comment line.\n",
-            " ORIG    3000 Comment.\n",
-            "2H     INC1  3 Another comment. \n",
-            "  HLT   "
-        );
-
-        const FORMATTED: &str = concat!(
-            "*     Comment line.\n",
-            "L          EQU  500           Comment.\n",
-            "TAG        ORIG 3000\n",
-            "*     Another comment line.\n",
-            "           ORIG 3000 Comment.\n",
-            "2H         INC1 3 Another comment.\n",
-            "           HLT\n"
-        );
-
         assert_eq!(format_code_to_string(UNFORMATTED), FORMATTED);
     }
 }
