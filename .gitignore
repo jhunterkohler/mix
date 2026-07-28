@@ -1,6 +1,10 @@
-# Editors
-.vscode/
-
 # Rust
 debug/
 target/
+
+# Various
+node_modules
+*.vsix
+out
+dist
+.vscode-test/
