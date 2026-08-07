@@ -6,8 +6,13 @@
             "type": "extensionHost",
             "request": "launch",
             "args": [
-                "--extensionDevelopmentPath=${workspaceFolder}"
-            ]
+                "--extensionDevelopmentPath=${workspaceFolder}/editors/vscode",
+                "${workspaceFolder}/editors/vscode/examples"
+            ],
+            "outFiles": [
+                "${workspaceFolder}/editors/vscode/out/**/*.(m|c|)js"
+            ],
+            "preLaunchTask": "npm: compile - editors/vscode"
         }
     ]
 }

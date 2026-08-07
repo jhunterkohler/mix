@@ -1,13 +1,14 @@
 {
     "compilerOptions": {
-        "module": "Node16",
-        "target": "ES2022",
+        "module": "node20",
+        "target": "ES2024",
         "outDir": "out",
-        "lib": ["ES2022"],
+        "lib": ["ES2024"],
         "sourceMap": true,
         "rootDir": "src",
         "strict": true,
         "noImplicitReturns": true,
-        "noUnusedParameters": true
+        "noUnusedParameters": true,
+        "types": ["node"]
     }
 }

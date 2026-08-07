@@ -26,21 +26,71 @@
         "grammars": [
             {
                 "language": "mixal",
-                "scopeName": "source.mix",
+                "scopeName": "text.mixal",
                 "path": "./syntaxes/mixal.tmLanguage.json"
+            }
+        ],
+        "configuration": [
+            {
+                "title": "Language Server",
+                "properties": {
+                    "language-mixal.server.path": {
+                        "type": [
+                            "null",
+                            "string"
+                        ],
+                        "scope": "machine-overridable",
+                        "default": "null",
+                        "markdownDescription": "Path to mixls executable. (Defaults to bundled binary.)"
+                    },
+                    "language-mixal.server.env": {
+                        "type": [
+                            "null",
+                            "object"
+                        ],
+                        "additionalProperties": {
+                            "type": "string"
+                        },
+                        "markdownDescription": "Environment variables to pass to mixls."
+                    },
+                    "language-mixal.server.args": {
+                        "type": "array",
+                        "default": [],
+                        "items": {
+                            "type": "string"
+                        },
+                        "markdownDescription": "Arguments to pass to mixls."
+                    }
+                }
+            },
+            {
+                "properties": {
+                    "language-mixal.trace.server": {
+                        "scope": "window",
+                        "type": "string",
+                        "enum": [
+                            "off",
+                            "messages",
+                            "verbose"
+                        ],
+                        "default": "verbose",
+                        "markdownDescription": "Traces the communication between VS Code and the language server."
+                    }
+                }
             }
         ]
     },
     "icon": "./logo.png",
     "repository": {
         "type": "git",
-        "url": "https://github.com/jhunterkohler/vscode-language-mixal"
+        "url": "https://github.com/jhunterkohler/mix"
     },
     "publisher": "jhunterkohler",
     "devDependencies": {
-        "@types/vscode": "^1.91.0",
-        "prettier": "^3.3.3",
-        "typescript": "^5.4.5"
+        "@types/node": "^26.1.2",
+        "@types/vscode": "^1.125.0",
+        "prettier": "^3.9.6",
+        "typescript": "^5.9.3"
     },
     "main": "./out/extension.js",
     "scripts": {
@@ -53,5 +103,8 @@
     "activationEvents": [
         "onLanguage:mixal",
         "onStartupFinished"
-    ]
+    ],
+    "dependencies": {
+        "vscode-languageclient": "^10.1.0"
+    }
 }

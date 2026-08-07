@@ -1,14 +1,33 @@
-import { ExtensionContext, languages } from "vscode";
-import { MixalFormattingEditProvider } from "./format";
-import { MixalLoggingService } from "./log";
+import * as path from "path";
+import { ExtensionContext } from "vscode";
+import {
+    LanguageClient,
+    LanguageClientOptions,
+    ServerOptions,
+} from "vscode-languageclient/node";
 
-export function activate(_context: ExtensionContext) {
-    const loggingService = new MixalLoggingService("MIXAL");
-
-    languages.registerDocumentFormattingEditProvider(
-        { scheme: "file", language: "mixal" },
-        new MixalFormattingEditProvider(loggingService)
+export async function activate(ctx: ExtensionContext) {
+    const debugServerPath = ctx.asAbsolutePath(
+        path.join("..", "..", "target", "debug", "mixls")
     );
 
-    loggingService.logInfo("MIX assembly language support loaded.");
+    const serverOptions: ServerOptions = {
+        run: { command: debugServerPath },
+        debug: { command: debugServerPath },
+    };
+
+    const clientOptions: LanguageClientOptions = {
+        documentSelector: [{ scheme: "file", language: "mixal" }],
+        synchronize: {},
+    };
+
+    const client = new LanguageClient(
+        "language-mixal",
+        "language-mixal",
+        serverOptions,
+        clientOptions,
+        true
+    );
+
+    await client.start();
 }
