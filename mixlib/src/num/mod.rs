@@ -315,7 +315,7 @@ impl Short {
     /// # Examples
     ///
     /// ```
-    /// use mixlib::{short, num::{Short, Sign}};
+    /// use mixlib::{short, num::Sign};
     ///
     /// assert_eq!(short!(-123).to_sign_u16(), (Sign::Minus, 123));
     /// ```
@@ -372,7 +372,7 @@ impl Short {
     /// # Examples
     ///
     /// ```
-    /// use mixlib::{byte, short, num::{Sign, Byte, Short}};
+    /// use mixlib::{byte, short, num::{Sign, Short}};
     ///
     /// assert_eq!(
     ///     Short::from_sign_bytes(Sign::Minus, [byte!(1), byte!(2)]),
@@ -443,7 +443,7 @@ impl Short {
     /// # Examples
     ///
     /// ```
-    /// use mixlib::{byte, short, num::{Byte, Short}};
+    /// use mixlib::{byte, short};
     ///
     /// assert_eq!(short![-, 1, 2].bytes(), [byte!(1), byte!(2)]);
     /// ```
@@ -533,7 +533,7 @@ impl Short {
     /// # Examples
     ///
     /// ```
-    /// use mixlib::{short, num::Short};
+    /// use mixlib::short;
     ///
     /// assert_eq!(short!(1).abs(), short!(1));
     /// assert_eq!(short!(-1).abs(), short!(1));
@@ -912,7 +912,7 @@ impl Word {
     /// # Examples
     ///
     /// ```
-    /// use mixlib::{byte, word, num::{Sign, Byte, Word}};
+    /// use mixlib::{byte, word, num::{Sign, Word}};
     ///
     /// let sign = Sign::Minus;
     /// let bytes = [byte!(1), byte!(2), byte!(3), byte!(4), byte!(5)];
@@ -938,7 +938,7 @@ impl Word {
     /// # Examples
     ///
     /// ```
-    /// use mixlib::{byte, word, num::{Sign, Byte, Word}};
+    /// use mixlib::{byte, word, num::Sign};
     ///
     /// let sign = Sign::Minus;
     /// let bytes = [byte!(1), byte!(2), byte!(3), byte!(4), byte!(5)];
