@@ -1,0 +1,20 @@
+[package]
+name = "mixlib-macros"
+version = "0.0.0"
+edition = "2024"
+readme = "Readme.md"
+license = "MIT"
+repository = "https://github.com/jhunterkohler/mix/tree/master/mixlib-macros"
+description = "MIX architecture utilities"
+keywords = ["assembly", "asm", "mix", "mixal"]
+categories = ["parser-implementations", "compilers", "development-tools"]
+homepage = "https://github.com/jhunterkohler/mix"
+authors = ["J. Hunter Kohler <jhunterkohler@gmail.com>"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0.97"
+quote = "1.0.40"
+syn = "2.0.105"
