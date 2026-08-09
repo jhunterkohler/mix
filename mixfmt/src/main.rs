@@ -3,8 +3,8 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process;
 
-use clap::{Parser, arg};
-use mixlib::fmt::format_code_to_string;
+use clap::Parser;
+use mixlib::fmt::format_to_string;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -39,7 +39,7 @@ fn read_stdin() -> io::Result<String> {
 
 fn format_stdin(args: &Args) -> io::Result<()> {
     let src = read_stdin()?;
-    let dest = format_code_to_string(src.trim_end());
+    let dest = format_to_string(src.trim_end());
 
     if args.check {
         if src != dest {
@@ -54,7 +54,7 @@ fn format_stdin(args: &Args) -> io::Result<()> {
 
 fn format_file(args: &Args, path: &Path) -> io::Result<()> {
     let src = fs::read_to_string(path)?;
-    let dest = format_code_to_string(src.trim_end());
+    let dest = format_to_string(src.trim_end());
 
     if args.check {
         if src != dest {

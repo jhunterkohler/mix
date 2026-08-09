@@ -6,6 +6,10 @@ readme = "Readme.md"
 license = "MIT"
 repository = "https://github.com/jhunterkohler/mix/tree/master/mixfmt"
 description = "MIXAL formatting"
+keywords = ["assembly", "asm", "mix", "mixal"]
+categories = ["command-line-utilities", "development-tools"]
+homepage = "https://github.com/jhunterkohler/mix"
+authors = ["J. Hunter Kohler <jhunterkohler@gmail.com>"]
 
 [dependencies]
 clap = { version = "4.5.24", features = ["derive"] }
