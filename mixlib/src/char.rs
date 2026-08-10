@@ -1,10 +1,11 @@
 //! MIX characters.
 
 use std::error;
-use std::fmt;
-use std::fmt::Write;
+use std::fmt::{self, Write};
+use std::io;
 use std::mem::transmute;
 
+use crate::bin::{Decode, Encode, EncodingError};
 use crate::num::Byte;
 
 macro_rules! define_char {
@@ -32,11 +33,11 @@ macro_rules! define_char {
             /// Highest value character.
             pub const MAX: Char = Char::Apostrophe;
 
-            /// The maximum number of bytes required to encode a `Char` in
+            /// The maximum number of bytes required to encode a [`Char`] in
             /// UTF-8.
             pub const MAX_LEN_UTF8: usize = 2;
 
-            /// Converts the character to the standard unicode `char` type.
+            /// Converts the character to the standard unicode [`char`] type.
             ///
             /// # Examples
             ///
@@ -54,7 +55,7 @@ macro_rules! define_char {
                 }
             }
 
-            /// Converts a mix character to the standard unicode `char` with
+            /// Converts a mix character to the standard unicode [`char`] with
             /// project's convenience replacements. This guarentees the output
             /// is also ascii.
             ///
@@ -95,8 +96,8 @@ macro_rules! define_char {
                 }
             }
 
-            /// Converts a standard unicode `char` to a MIX character,
-            /// returning `None` when the character is invalid.
+            /// Converts a standard unicode [`char`] to a MIX character,
+            /// returning [`None`] when the character is invalid.
             ///
             /// # Examples
             ///
@@ -116,9 +117,9 @@ macro_rules! define_char {
                 }
             }
 
-            /// Converts a standard unicode `char` to a MIX character using the
-            /// project's convenience replacements, returning `None` when a
-            /// character is invalid.
+            /// Converts a standard unicode [`char`] to a MIX character using
+            /// the project's convenience replacements, returning [`None`] when
+            /// a character is invalid.
             ///
             /// The replacements are `'~'` for [`Char::CapitalDelta`],
             /// `'['` for [`Char::CapitalSigma`], and `'#'` for
@@ -206,11 +207,33 @@ macro_rules! define_char {
             ///
             /// # Panics
             ///
-            /// Panics if the buffer is not large enough a buffer of length
-            /// `Char::MAX_LEN_UTF8` is large enough to encode any `Char`.
+            /// Panics if the buffer is not large enough. A buffer of length
+            /// [`Char::MAX_LEN_UTF8`] is large enough to encode any [`Char`].
             ///
             /// # Examples
-            pub const fn encode_utf8(self, dest: &mut [u8]) -> &str {
+            ///
+            /// Basic usage:
+            ///
+            /// ```
+            /// use mixlib::char::Char;
+            ///
+            /// let mut buf = [0; Char::MAX_LEN_UTF8];
+            ///
+            /// assert_eq!(Char::CapitalA.encode_utf8(&mut buf), "A");
+            /// assert_eq!(Char::CapitalSigma.encode_utf8(&mut buf), "Σ");
+            /// ```
+            ///
+            /// A buffer that is too small panics:
+            ///
+            /// ```should_panic
+            /// use mixlib::char::Char;
+            ///
+            /// let mut buf = [0; 1];
+            ///
+            /// // `CapitalSigma` requires 2 bytes to encode in UTF-8.
+            /// Char::CapitalSigma.encode_utf8(&mut buf);
+            /// ```
+            pub const fn encode_utf8(self, dest: &mut [u8]) -> &mut str {
                 self.to_unicode().encode_utf8(dest)
             }
         }
@@ -277,6 +300,7 @@ define_char! {
 }
 
 impl From<Char> for char {
+    /// Converts from [`Char`] to [`char`] using [`Char::to_unicode`].
     fn from(value: Char) -> Self {
         value.to_unicode()
     }
@@ -309,7 +333,7 @@ impl fmt::Display for TryFromCharError {
 impl TryFrom<char> for Char {
     type Error = TryFromCharError;
 
-    /// Converts from `char` using `Char::from_unicode`,
+    /// Converts from [`char`] to [`Char`] using [`Char::from_unicode`].
     fn try_from(value: char) -> Result<Self, Self::Error> {
         Self::from_unicode(value).ok_or(TryFromCharError(()))
     }
@@ -328,6 +352,8 @@ impl TryFrom<u8> for Char {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         if value <= Self::MAX as u8 {
+            // SAFETY: `Char` has repr(u8) and we've guaranteed that `value` is
+            // in range.
             Ok(unsafe { transmute(value) })
         } else {
             Err(TryFromCharError(()))
@@ -338,5 +364,18 @@ impl TryFrom<u8> for Char {
 impl fmt::Display for Char {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_char(self.to_unicode())
+    }
+}
+
+impl Encode for Char {
+    fn encode<W: io::Write>(&self, w: W) -> io::Result<()> {
+        (*self as u8).encode(w)
+    }
+}
+
+impl Decode for Char {
+    fn decode<R: io::Read>(r: R) -> io::Result<Self> {
+        Char::try_from(u8::decode(r)?)
+            .map_err(|_| io::Error::other(EncodingError))
     }
 }
