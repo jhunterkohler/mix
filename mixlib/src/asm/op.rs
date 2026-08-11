@@ -1330,7 +1330,6 @@ mod tests {
     #[test]
     fn op_docs_formatting() {
         for op in Op::iter() {
-            dbg!(op);
             assert!(op.docs().ends_with("\n"));
             assert!(op.docs().starts_with(&format!("`{}` - ", op.as_str())));
         }
