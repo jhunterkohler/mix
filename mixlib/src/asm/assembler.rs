@@ -1501,4 +1501,21 @@ mod tests {
             assert_eq!(symbol_values, vec![value]);
         }
     }
+
+    #[test]
+    fn assemble_ok_location_literal_debug_info() {
+        let src = " ORIG 2000\n CON *\n END 0";
+        let ast = Ast::from_str(&src).unwrap();
+        let program = assemble(&ast, &src, None).unwrap();
+
+        dbg!(ast);
+
+        assert_eq!(
+            program.debug_info.location_literals,
+            vec![LocationLiteralDebugInfo {
+                span: Span::new(16, 17),
+                value: LocationCounter::try_from(2000).unwrap()
+            }]
+        )
+    }
 }
