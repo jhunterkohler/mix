@@ -251,6 +251,8 @@ struct Assembler<'a> {
     strings: Vec<AlfStringDebugInfo>,
     /// Constants declared so far with `CON`.
     constants: Vec<ConstantDebugInfo>,
+    /// All location literals '*' in atomic expressions.
+    location_literals: Vec<LocationLiteralDebugInfo>,
     /// The current location counter during the assembly process.
     location_counter: LocationCounter,
     /// Errors during assembly.
@@ -296,6 +298,7 @@ impl<'a> Assembler<'a> {
             literal_constant_inserts: Default::default(),
             strings: Default::default(),
             constants: Default::default(),
+            location_literals: Default::default(),
             location_counter: Default::default(),
             errors: Default::default(),
         }
@@ -478,6 +481,7 @@ impl<'a> Assembler<'a> {
                 constants: self.constants,
                 literal_constants: self.literal_constants,
                 strings: self.strings,
+                location_literals: self.location_literals,
             }
         };
 
@@ -720,7 +724,14 @@ impl<'a> Assembler<'a> {
         atomic_expr: &AtomicExpr,
     ) -> Result<Word, ()> {
         match atomic_expr.kind() {
-            AtomicExprKind::Location => Ok(self.location_counter.into()),
+            AtomicExprKind::Location => {
+                self.location_literals.push(LocationLiteralDebugInfo {
+                    span: atomic_expr.span(),
+                    value: self.location_counter,
+                });
+
+                Ok(self.location_counter.into())
+            }
             AtomicExprKind::Symbol(symbol) => {
                 match self.active_symbols.get_mut(symbol) {
                     Some(info) => {

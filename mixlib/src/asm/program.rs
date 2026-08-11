@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::bin::*;
 use crate::char::Char;
-use crate::num::{MemoryAddress, Word};
+use crate::num::{LocationCounter, MemoryAddress, Word};
 use crate::source::Span;
 use crate::symbol::Symbol;
 
@@ -27,7 +27,7 @@ impl Program {
         &self.sections
     }
 
-    /// The program's debug info, if any.
+    /// The program's debug info.
     pub fn debug_info(&self) -> &ProgramDebugInfo {
         &self.debug_info
     }
@@ -106,6 +106,7 @@ pub struct ProgramDebugInfo {
     pub(super) constants: Vec<ConstantDebugInfo>,
     pub(super) literal_constants: Vec<LiteralConstantDebugInfo>,
     pub(super) strings: Vec<AlfStringDebugInfo>,
+    pub(super) location_literals: Vec<LocationLiteralDebugInfo>,
 }
 
 impl ProgramDebugInfo {
@@ -145,9 +146,15 @@ impl ProgramDebugInfo {
     pub fn literal_constants(&self) -> &[LiteralConstantDebugInfo] {
         &self.literal_constants
     }
+
     /// List of all strings defined with the `ALF` operation.
     pub fn strings(&self) -> &[AlfStringDebugInfo] {
         &self.strings
+    }
+
+    /// List of all location literals in the program.
+    pub fn location_literals(&self) -> &[LocationLiteralDebugInfo] {
+        &self.location_literals
     }
 }
 
@@ -159,7 +166,8 @@ impl Encode for ProgramDebugInfo {
         self.symbols.encode(&mut w)?;
         self.constants.encode(&mut w)?;
         self.literal_constants.encode(&mut w)?;
-        self.strings.encode(&mut w)
+        self.strings.encode(&mut w)?;
+        self.location_literals.encode(&mut w)
     }
 }
 
@@ -173,6 +181,7 @@ impl Decode for ProgramDebugInfo {
             constants: Decode::decode(&mut r)?,
             literal_constants: Decode::decode(&mut r)?,
             strings: Decode::decode(&mut r)?,
+            location_literals: Decode::decode(&mut r)?,
         })
     }
 }
@@ -354,6 +363,38 @@ impl Decode for AlfStringDebugInfo {
             definition: Decode::decode(&mut r)?,
             address: Decode::decode(&mut r)?,
             chars: Decode::decode(&mut r)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocationLiteralDebugInfo {
+    pub(super) span: Span,
+    pub(super) value: LocationCounter,
+}
+
+impl LocationLiteralDebugInfo {
+    pub fn span(&self) -> Span {
+        self.span
+    }
+
+    pub fn value(&self) -> LocationCounter {
+        self.value
+    }
+}
+
+impl Encode for LocationLiteralDebugInfo {
+    fn encode<W: io::Write>(&self, mut w: W) -> io::Result<()> {
+        self.span.encode(&mut w)?;
+        self.value.encode(&mut w)
+    }
+}
+
+impl Decode for LocationLiteralDebugInfo {
+    fn decode<R: io::Read>(mut r: R) -> io::Result<Self> {
+        Ok(LocationLiteralDebugInfo {
+            span: Decode::decode(&mut r)?,
+            value: Decode::decode(&mut r)?,
         })
     }
 }
