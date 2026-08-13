@@ -4,7 +4,7 @@ resolver = "2"
 members = [
     "mixlib",
     "mixfmt",
+    "mixasm",
+    "mixls",
+    "mixlib-macros",
 ]
-
-package.authors = ["John Hunter Kohler <jhunterkohler@gmail.com>"]
-package.keywords = ["assembly", "asm", "mix", "mixal"]
