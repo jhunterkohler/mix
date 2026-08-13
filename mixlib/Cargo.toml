@@ -1,10 +1,17 @@
 [package]
 name = "mixlib"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 readme = "Readme.md"
 license = "MIT"
 repository = "https://github.com/jhunterkohler/mix/tree/master/mixlib"
 description = "MIX architecture utilities"
+keywords = ["assembly", "asm", "mix", "mixal"]
+categories = ["parser-implementations", "compilers", "development-tools"]
+homepage = "https://github.com/jhunterkohler/mix"
+authors = ["J. Hunter Kohler <jhunterkohler@gmail.com>"]
 
-[dev-dependencies]
+[dependencies]
+enum-as-inner = "0.6.1"
+siphasher = "1.0.1"
+mixlib-macros = { path = "../mixlib-macros", version = "0.0.0" }
