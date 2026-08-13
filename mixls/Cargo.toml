@@ -1,0 +1,20 @@
+[package]
+name = "mixls"
+version = "0.0.1"
+edition = "2024"
+readme = "Readme.md"
+license = "MIT"
+repository = "https://github.com/jhunterkohler/mix/tree/master/mixls"
+description = "MIX language server"
+
+[dev-dependencies]
+
+[dependencies]
+tokio = { version = "1.53.1", features = ["full"] }
+tower-lsp-server = "0.23.0"
+mixlib = { version = ">=0.6,<1", path = "../mixlib" }
+line-index = "0.1.2"
+dashmap = "6.2.1"
+rangemap = "1.7.1"
+dissimilar = "1.0.11"
+
