@@ -140,10 +140,7 @@ int_conv! {
 
 impl From<Short> for Word {
     fn from(value: Short) -> Self {
-        let sign_bit = (value.mask_sign() as u32) << 18;
-        let value_bits = value.mask_value() as u32;
-
-        Word(sign_bit | value_bits)
+        value.zero_extend_to_word()
     }
 }
 

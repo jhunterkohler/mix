@@ -658,6 +658,13 @@ impl Short {
     const fn const_neg(self) -> Short {
         Short(self.0 ^ Short::SIGN_MASK)
     }
+
+    pub(crate) const fn zero_extend_to_word(self) -> Word {
+        let sign_bit = (self.mask_sign() as u32) << 18;
+        let value_bits = self.mask_value() as u32;
+
+        Word(sign_bit | value_bits)
+    }
 }
 
 impl Neg for Short {
@@ -1368,6 +1375,13 @@ impl Word {
 
     const fn const_neg(self) -> Word {
         Word(self.0 ^ Word::SIGN_MASK)
+    }
+
+    pub(crate) const fn truncate_to_short(self) -> Short {
+        let sign_bit = (self.mask_sign() >> 18) as u16;
+        let value_bits = (self.0 as u16) & Short::VALUE_MASK;
+
+        Short(sign_bit | value_bits)
     }
 }
 
