@@ -1,0 +1,22 @@
+[package]
+name = "mixasm"
+version = "0.1.0"
+edition = "2024"
+readme = "Readme.md"
+license = "MIT"
+repository = "https://github.com/jhunterkohler/mix/tree/master/mixasm"
+description = "MIXAL formatting"
+keywords = ["assembly", "asm", "mix", "mixal"]
+categories = ["command-line-utilities", "development-tools"]
+homepage = "https://github.com/jhunterkohler/mix"
+authors = ["J. Hunter Kohler <jhunterkohler@gmail.com>"]
+
+[dependencies]
+annotate-snippets = "0.11.5"
+anyhow = "1.0.98"
+clap = { version = "4.5.24", features = ["derive"] }
+human-panic = "2.0.3"
+pathdiff = "0.2.3"
+mixlib = { version = ">=0.6,<1", path = "../mixlib" }
+
+[dev-dependencies]
