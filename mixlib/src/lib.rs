@@ -14,6 +14,7 @@ pub mod ast;
 pub mod bin;
 pub mod char;
 pub mod dev;
+pub mod emu;
 pub mod fmt;
 pub mod num;
 pub mod source;
