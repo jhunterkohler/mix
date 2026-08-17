@@ -728,47 +728,6 @@ impl Decode for Short {
     }
 }
 
-#[derive(Clone, Copy)]
-struct WordFieldInfo {
-    invalid: bool,
-    bit_mask: u32,
-    bit_offset: u8,
-}
-
-/// Lookup table for storing and loading operations.
-const WORD_FIELD_INFO: [WordFieldInfo; 64] = {
-    let mut field_info =
-        [WordFieldInfo { invalid: false, bit_mask: 0, bit_offset: 0 }; 64];
-
-    let mut left = 0;
-    while left < 8 {
-        let mut right = 0;
-        while right < 8 {
-            let index = left << 3 | right;
-
-            if left > right || right > 5 {
-                field_info[index].invalid = true;
-            } else {
-                let byte_left = if left == 0 { 1 } else { left };
-                let byte_right = if right == 0 { 1 } else { right + 1 };
-
-                let bit_width = (byte_right - byte_left) * 6;
-                let bit_offset = (6 - byte_right) * 6;
-                let bit_mask = ((1 << bit_width) - 1) << bit_offset;
-
-                field_info[index].bit_mask = bit_mask;
-                field_info[index].bit_offset = bit_offset as u8;
-            }
-
-            right += 1;
-        }
-        left += 1;
-    }
-
-    field_info
-};
-
-/// A MIX word.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Word(u32);
@@ -1229,18 +1188,13 @@ impl Word {
     /// assert_eq!(value.with_load(field), Some(word![+, 0, 0, 2, 3, 4]));
     /// assert_eq!(value.with_load(Byte::MAX), None);
     /// ```
-    pub const fn with_load(self, field: Byte) -> Option<Word> {
-        let field = field.to_u8();
-        let info = WORD_FIELD_INFO[field as usize];
+    pub const fn with_load(self, field_spec: FieldSpec) -> Word {
+        let masks = field_spec.masks();
+        let sign_bit =
+            if field_spec.includes_sign() { self.mask_sign() } else { 0 };
+        let value_bits = (self.0 & masks.bit_mask) >> masks.bit_offset;
 
-        if info.invalid {
-            return None;
-        }
-
-        let signbit = if field < 8 { self.mask_sign() } else { 0 };
-        let uvalue = (self.mask_value() & info.bit_mask) >> info.bit_offset;
-
-        Some(Word(signbit | uvalue))
+        Word(sign_bit | value_bits)
     }
 
     /// Returns the value of `self` as if the value of `value` has been stored
@@ -1264,22 +1218,20 @@ impl Word {
     /// assert_eq!(dest.with_store(value, field), Some(word![-, 8, 9, 10, 4, 5]));
     /// assert_eq!(dest.with_store(value, Byte::MAX), None);
     /// ```
-    pub const fn with_store(self, value: Word, field: Byte) -> Option<Word> {
-        let field = field.to_u8();
-        let info = WORD_FIELD_INFO[field as usize];
+    pub const fn with_store(self, value: Word, field_spec: FieldSpec) -> Word {
+        let masks = field_spec.masks();
+        let sign_bit = if field_spec.includes_sign() {
+            value.mask_sign()
+        } else {
+            self.mask_sign()
+        };
 
-        if info.invalid {
-            return None;
-        }
+        let new_value_bits =
+            (value.mask_value() << masks.bit_offset) & masks.bit_mask;
 
-        let signbit =
-            if field < 8 { value.mask_sign() } else { self.mask_sign() };
+        let old_value_bits = self.mask_value() & !masks.bit_mask;
 
-        let overwrite =
-            (value.mask_value() << info.bit_offset) & info.bit_mask;
-        let uvalue = overwrite | (self.mask_value() & !info.bit_mask);
-
-        Some(Word(signbit | uvalue))
+        Word(sign_bit | new_value_bits | old_value_bits)
     }
 
     /// Returns `self` as though its (0:2) field has been set by `value`.
@@ -1584,5 +1536,90 @@ impl Decode for LocationCounter {
     fn decode<R: io::Read>(r: R) -> io::Result<Self> {
         LocationCounter::from_u16(u16::decode(r)?)
             .ok_or_else(|| io::Error::other(EncodingError))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FieldSpecMasks {
+    bit_mask: u32,
+    bit_offset: u8,
+}
+
+/// Lookup table for valid field specs.
+const FIELD_SPEC_MASKS: [Option<FieldSpecMasks>; 64] = {
+    let mut field_info = [None; 64];
+
+    let mut left = 0;
+    while left < 8 {
+        let mut right = 0;
+        while right < 8 {
+            let index = left << 3 | right;
+            if left <= right && right <= 5 {
+                let byte_left = if left == 0 { 1 } else { left };
+                let byte_right = if right == 0 { 1 } else { right + 1 };
+
+                let bit_width = (byte_right - byte_left) * 6;
+                let bit_offset = (6 - byte_right) * 6;
+                let bit_mask = ((1 << bit_width) - 1) << bit_offset;
+
+                field_info[index] = Some(FieldSpecMasks {
+                    bit_mask,
+                    bit_offset: bit_offset as u8,
+                });
+            }
+
+            right += 1;
+        }
+        left += 1;
+    }
+
+    field_info
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct InvalidFieldSpecError(());
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FieldSpec {
+    byte: u8,
+}
+
+impl FieldSpec {
+    pub const fn from_parts(left: u8, right: u8) -> Option<Self> {
+        if left <= right && right <= 5 {
+            Some(FieldSpec { byte: left << 3 | right })
+        } else {
+            None
+        }
+    }
+
+    pub const fn includes_sign(self) -> bool {
+        self.byte < 8
+    }
+
+    pub const fn to_byte(self) -> Byte {
+        Byte(self.byte)
+    }
+
+    pub const fn from_byte(value: Byte) -> Option<Self> {
+        Self::from_parts(value.0 >> 3, value.0 & 0b111)
+    }
+
+    const fn masks(self) -> FieldSpecMasks {
+        unsafe { FIELD_SPEC_MASKS[self.byte as usize].unwrap_unchecked() }
+    }
+}
+
+impl From<FieldSpec> for Byte {
+    fn from(value: FieldSpec) -> Self {
+        value.to_byte()
+    }
+}
+
+impl TryFrom<Byte> for FieldSpec {
+    type Error = InvalidFieldSpecError;
+
+    fn try_from(value: Byte) -> Result<Self, Self::Error> {
+        Self::from_byte(value).ok_or(InvalidFieldSpecError(()))
     }
 }

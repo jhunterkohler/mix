@@ -82,7 +82,8 @@ int_conv! {
         isize, Short, Word, MemoryAddress, LocationCounter;
     from_T_for_main = ;
     try_from_main_for_T = ;
-    from_main_for_T = u8, u16, u32, u128, usize, i8, i16, i32, i128, isize;
+    from_main_for_T = u8, u16, u32, u64, u128, usize, i8, i16, i32, i64,
+        i128, isize;
 }
 
 int_conv! {
