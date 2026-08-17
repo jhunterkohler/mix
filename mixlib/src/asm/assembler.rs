@@ -10,7 +10,9 @@ use std::path::PathBuf;
 
 use crate::asm::Op;
 use crate::ast::*;
-use crate::num::{Byte, LocationCounter, MemoryAddress, Sign, Word};
+use crate::num::{
+    Byte, FieldSpec, LocationCounter, MemoryAddress, Sign, Word,
+};
 use crate::source::Span;
 use crate::symbol::{Symbol, SymbolName};
 use crate::word;
@@ -533,10 +535,10 @@ impl<'a> Assembler<'a> {
         if let Err(e) = Instruction::try_from(raw_inst) {
             raw_inst = Word::POS_ZERO;
             match e.kind() {
-                InstructionTryFromErrorKind::InvalidField => {
+                InvalidInstructionErrorKind::InvalidField => {
                     self.err_invalid_field(moa, f_part_val);
                 }
-                InstructionTryFromErrorKind::InvalidIndex => {
+                InvalidInstructionErrorKind::InvalidIndex => {
                     self.err_invalid_index(moa, i_part_val);
                 }
             }
@@ -816,7 +818,8 @@ impl<'a> Assembler<'a> {
 
                     Byte::try_from(f_part_val)
                         .ok()
-                        .and_then(|field| value.with_store(expr_value, field))
+                        .and_then(FieldSpec::from_byte)
+                        .map(|spec| value.with_store(expr_value, spec))
                         .unwrap_or_else(|| {
                             self.err_field_out_of_range(f_part, f_part_val);
                             Word::POS_ZERO

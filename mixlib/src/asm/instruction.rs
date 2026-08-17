@@ -1,12 +1,64 @@
 use std::error;
 use std::fmt;
+use std::mem;
 
-use crate::asm::{Op, OpCode};
+use crate::asm::Op;
 use crate::num::{Byte, Short, Word};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidInstructionIndexError(());
+
+impl fmt::Display for InvalidInstructionIndexError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("invalid instruction index")
+    }
+}
+
+impl error::Error for InvalidInstructionIndexError {}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum InstructionIndex {
+    None = 0,
+    I1 = 1,
+    I2 = 2,
+    I3 = 3,
+    I4 = 4,
+    I5 = 5,
+    I6 = 6,
+}
+
+impl InstructionIndex {
+    pub const fn to_byte(self) -> Byte {
+        unsafe { Byte::from_u8_unchecked(self as u8) }
+    }
+
+    pub const fn from_byte(value: Byte) -> Option<Self> {
+        if value.to_u8() <= 6 {
+            Some(unsafe { mem::transmute(value.to_u8()) })
+        } else {
+            None
+        }
+    }
+}
+
+impl From<InstructionIndex> for Byte {
+    fn from(value: InstructionIndex) -> Self {
+        value.to_byte()
+    }
+}
+
+impl TryFrom<Byte> for InstructionIndex {
+    type Error = InvalidInstructionIndexError;
+
+    fn try_from(value: Byte) -> Result<Self, Self::Error> {
+        Self::from_byte(value).ok_or(InvalidInstructionIndexError(()))
+    }
+}
 
 /// Enum storing the kind of error when converting to an [`Instruction`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum InstructionTryFromErrorKind {
+pub enum InvalidInstructionErrorKind {
     /// The field value is invalid.
     InvalidField,
     /// The index value is invalid.
@@ -16,91 +68,91 @@ pub enum InstructionTryFromErrorKind {
     InvalidIndex,
 }
 
-use InstructionTryFromErrorKind::*;
-
 /// An error that can be returned when converting to an [`Instruction`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InstructionTryFromError {
-    kind: InstructionTryFromErrorKind,
+pub struct InvalidInstructionError {
+    kind: InvalidInstructionErrorKind,
 }
 
-impl InstructionTryFromError {
+impl InvalidInstructionError {
     /// Get the kind of instruction conversion error.
-    pub const fn kind(&self) -> &InstructionTryFromErrorKind {
+    pub const fn kind(&self) -> &InvalidInstructionErrorKind {
         &self.kind
     }
 }
 
-impl error::Error for InstructionTryFromError {}
-
-impl fmt::Display for InstructionTryFromError {
+impl fmt::Display for InvalidInstructionError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(match self.kind {
-            InvalidField => "invalid field",
-            InvalidIndex => "invalid index",
+            InvalidInstructionErrorKind::InvalidField => "invalid field",
+            InvalidInstructionErrorKind::InvalidIndex => "invalid index",
         })
     }
 }
+
+impl error::Error for InvalidInstructionError {}
 
 /// A MIX instruction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Instruction {
     op: Op,
     field: Byte,
-    index: Byte,
+    index: InstructionIndex,
     address: Short,
 }
 
 impl Instruction {
-    /// Returns the operation value of the instruction.
     pub const fn op(&self) -> Op {
         self.op
     }
 
-    /// Returns the field value of the instruction.
+    pub const fn index(&self) -> InstructionIndex {
+        self.index
+    }
+
     pub const fn field(&self) -> Byte {
         self.field
     }
 
-    /// Returns the address value of the instruction.
     pub const fn address(&self) -> Short {
         self.address
-    }
-
-    /// Returns the index value of the instruction.
-    pub const fn index(&self) -> Byte {
-        self.index
     }
 }
 
 impl From<Instruction> for Word {
     fn from(value: Instruction) -> Self {
         let (sign, [a1, a2]) = value.address.to_sign_bytes();
+        let bytes = [
+            a1,
+            a2,
+            value.index.to_byte(),
+            value.field,
+            value.op.opcode().to_byte(),
+        ];
 
-        Word::from_sign_bytes(
-            sign,
-            [a1, a2, value.index, value.field, Byte::from(value.op.opcode())],
-        )
+        Word::from_sign_bytes(sign, bytes)
     }
 }
 
 impl TryFrom<Word> for Instruction {
-    type Error = InstructionTryFromError;
+    type Error = InvalidInstructionError;
 
     fn try_from(value: Word) -> Result<Self, Self::Error> {
         let (sign, [a1, a2, index, field, opcode]) = value.to_sign_bytes();
 
-        if index.to_u8() > 6 {
-            return Err(InstructionTryFromError { kind: InvalidIndex });
-        }
+        let index = InstructionIndex::try_from(index).map_err(|_| {
+            InvalidInstructionError {
+                kind: InvalidInstructionErrorKind::InvalidIndex,
+            }
+        })?;
 
         let address = Short::from_sign_bytes(sign, [a1, a2]);
+        let op = Op::from_opcode_and_field(opcode.into(), field).ok_or(
+            InvalidInstructionError {
+                kind: InvalidInstructionErrorKind::InvalidField,
+            },
+        )?;
 
-        // Note that all opcode values exist, so only the field can be
-        // incorrect. That is, some opcodes are overloaded by field.
-        let op = Op::from_opcode_and_field(OpCode::from(opcode), field)
-            .ok_or_else(|| InstructionTryFromError { kind: InvalidField })?;
-
-        Ok(Instruction { op, address, index, field })
+        Ok(Instruction { op, index, address, field })
     }
 }
