@@ -15,3 +15,4 @@ authors = ["J. Hunter Kohler <jhunterkohler@gmail.com>"]
 enum-as-inner = "0.6.1"
 siphasher = "1.0.1"
 mixlib-macros = { path = "../mixlib-macros", version = "0.0.0" }
+rustc-hash = "2.1.3"
