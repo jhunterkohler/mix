@@ -40,15 +40,15 @@ const WORD_ENCODED_LEN: usize = 4;
 /// Error returned by [`DeviceUnit::try_from`] when a value is not a valid
 /// unit number (i.e., greater than [`DeviceUnit::MAX`]).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct UnitTryFromError(());
+pub struct DeviceUnitTryFromError(());
 
-impl fmt::Display for UnitTryFromError {
+impl fmt::Display for DeviceUnitTryFromError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("invalid device unit number")
     }
 }
 
-impl error::Error for UnitTryFromError {}
+impl error::Error for DeviceUnitTryFromError {}
 
 /// A MIX device unit number, from 0 ([`Tape0`](DeviceUnit::Tape0)) through
 /// 20 ([`PaperTape`](DeviceUnit::PaperTape)).
@@ -113,6 +113,14 @@ impl DeviceUnit {
         unsafe { transmute(value as u8) }
     }
 
+    pub const fn to_byte(self) -> Byte {
+        unsafe { Byte::from_u8_unchecked(self as u8) }
+    }
+
+    pub const fn from_byte(value: Byte) -> Option<Self> {
+        Self::from_usize(value.to_u8() as usize)
+    }
+
     /// Returns the class of peripheral device that this unit belongs to.
     pub const fn kind(self) -> DeviceKind {
         use DeviceUnit::*;
@@ -138,11 +146,25 @@ impl From<DeviceUnit> for usize {
     }
 }
 
+impl From<DeviceUnit> for Byte {
+    fn from(value: DeviceUnit) -> Self {
+        Byte::from_u8(value as u8).unwrap()
+    }
+}
+
 impl TryFrom<usize> for DeviceUnit {
-    type Error = UnitTryFromError;
+    type Error = DeviceUnitTryFromError;
 
     fn try_from(value: usize) -> std::result::Result<Self, Self::Error> {
-        DeviceUnit::from_usize(value).ok_or(UnitTryFromError(()))
+        DeviceUnit::from_usize(value).ok_or(DeviceUnitTryFromError(()))
+    }
+}
+
+impl TryFrom<Byte> for DeviceUnit {
+    type Error = DeviceUnitTryFromError;
+
+    fn try_from(value: Byte) -> std::result::Result<Self, Self::Error> {
+        DeviceUnit::try_from(usize::from(value))
     }
 }
 
