@@ -11,7 +11,7 @@ use std::hash::Hash;
 use std::hash::Hasher;
 use std::io;
 use std::mem::transmute;
-use std::ops::{Index, IndexMut, Mul, Neg};
+use std::ops::{Mul, Neg};
 
 use crate::bin::{Decode, Encode, EncodingError};
 
@@ -526,6 +526,10 @@ impl Short {
         self.mask_sign() != 0 && self.mask_value() != 0
     }
 
+    pub const fn is_even(self) -> bool {
+        self.0 & 1 == 0
+    }
+
     /// Compute the absolute value of `self`.
     ///
     /// Effectively sets the sign of `self` to [`Sign::Plus`].
@@ -641,6 +645,13 @@ impl Short {
         let overflow = mulled > Self::VALUE_MASK as u32;
 
         (Short(res_sign | res_value), overflow)
+    }
+
+    pub const fn with_sign(self, sign: Sign) -> Short {
+        let sign_bit = (sign as u16) << 12;
+        let value_bits = self.mask_value();
+
+        Short(sign_bit | value_bits)
     }
 
     const SIGN_MASK: u16 = 1 << 12;
@@ -1048,6 +1059,10 @@ impl Word {
         self.mask_sign() != 0 && self.mask_value() != 0
     }
 
+    pub const fn is_even(self) -> bool {
+        self.0 & 1 == 0
+    }
+
     /// Compute the absolute value of `self`.
     ///
     /// # Examples
@@ -1313,6 +1328,12 @@ impl Word {
         Word(fifth_byte | other_bytes)
     }
 
+    pub const fn with_sign(self, sign: Sign) -> Word {
+        let sign_bit = (sign as u32) << 30;
+        let value_bits = self.mask_value();
+        Word(sign_bit | value_bits)
+    }
+
     const SIGN_MASK: u32 = 1 << 30;
     const VALUE_MASK: u32 = (1 << 30) - 1;
     const MASK: u32 = Self::SIGN_MASK | Self::VALUE_MASK;
@@ -1440,20 +1461,6 @@ impl MemoryAddress {
     }
 }
 
-impl<T> Index<MemoryAddress> for [T] {
-    type Output = T;
-
-    fn index(&self, index: MemoryAddress) -> &Self::Output {
-        &self[usize::try_from(index.0).unwrap()]
-    }
-}
-
-impl<T> IndexMut<MemoryAddress> for [T] {
-    fn index_mut(&mut self, index: MemoryAddress) -> &mut Self::Output {
-        &mut self[usize::try_from(index.0).unwrap()]
-    }
-}
-
 impl fmt::Display for MemoryAddress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
@@ -1517,6 +1524,11 @@ impl LocationCounter {
     pub const unsafe fn from_u16_unchecked(value: u16) -> LocationCounter {
         debug_assert!(value <= LocationCounter::MAX.0);
         LocationCounter(value)
+    }
+
+    pub const fn location_after(address: MemoryAddress) -> LocationCounter {
+        // SAFETY: MemoryAddress::MAX + 1 = 4000 < 4095 = LocationCounter::MAX
+        unsafe { LocationCounter::from_u16_unchecked(address.to_u16() + 1) }
     }
 }
 
