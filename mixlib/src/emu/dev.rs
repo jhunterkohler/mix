@@ -209,11 +209,11 @@ impl DeviceKind {
     }
 
     /// Return an error if block size is invalid.
-    fn validate_block_size(self, data: &[Word]) -> Result<()> {
+    fn validate_block_size(self, data: &[Word]) -> DeviceResult<()> {
         if data.len() == self.block_size() {
             Ok(())
         } else {
-            Err(Error::from(ErrorKind::InvalidBlockSize))
+            Err(DeviceError::from(DeviceErrorKind::InvalidBlockSize))
         }
     }
 }
@@ -230,7 +230,7 @@ pub enum DeviceMode {
 /// The kind of error produced by a [`Device`] operation.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ErrorKind {
+pub enum DeviceErrorKind {
     /// The data slice passed to [`Device::input`] or [`Device::output`] did
     /// not match the device's [`DeviceKind::block_size`].
     InvalidBlockSize,
@@ -251,21 +251,21 @@ pub enum ErrorKind {
     Other,
 }
 
-impl ErrorKind {
+impl DeviceErrorKind {
     fn as_str(&self) -> &'static str {
         match self {
-            ErrorKind::InvalidBlockSize => "invalid block size",
-            ErrorKind::InvalidInputWord => "invalid input word",
-            ErrorKind::InvalidInputChar => "invalid input character",
-            ErrorKind::InvalidOutputChar => "invalid output character",
-            ErrorKind::InputUnsupported => "input unsupported",
-            ErrorKind::OutputUnsupported => "output unsupported",
-            ErrorKind::Other => "other",
+            DeviceErrorKind::InvalidBlockSize => "invalid block size",
+            DeviceErrorKind::InvalidInputWord => "invalid input word",
+            DeviceErrorKind::InvalidInputChar => "invalid input character",
+            DeviceErrorKind::InvalidOutputChar => "invalid output character",
+            DeviceErrorKind::InputUnsupported => "input unsupported",
+            DeviceErrorKind::OutputUnsupported => "output unsupported",
+            DeviceErrorKind::Other => "other",
         }
     }
 }
 
-impl fmt::Display for ErrorKind {
+impl fmt::Display for DeviceErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(self.as_str())
     }
@@ -273,14 +273,14 @@ impl fmt::Display for ErrorKind {
 
 /// The error type for [`Device`] operations.
 #[derive(Debug)]
-pub struct Error {
-    kind: ErrorKind,
+pub struct DeviceError {
+    kind: DeviceErrorKind,
     inner: Option<Box<dyn error::Error + Send + Sync>>,
 }
 
-impl Error {
+impl DeviceError {
     /// Creates an error of the given `kind`, wrapping `e` as its source.
-    pub fn new<E>(kind: ErrorKind, e: E) -> Error
+    pub fn new<E>(kind: DeviceErrorKind, e: E) -> DeviceError
     where
         E: Into<Box<dyn error::Error + Send + Sync>>,
     {
@@ -288,15 +288,15 @@ impl Error {
     }
 
     /// Creates an [`ErrorKind::Other`] error wrapping `e`.
-    pub fn other<E>(e: E) -> Error
+    pub fn other<E>(e: E) -> DeviceError
     where
         E: Into<Box<dyn error::Error + Send + Sync>>,
     {
-        Self { kind: ErrorKind::Other, inner: Some(e.into()) }
+        Self { kind: DeviceErrorKind::Other, inner: Some(e.into()) }
     }
 
     /// Returns the corresponding [`ErrorKind`] for this error.
-    pub fn kind(&self) -> ErrorKind {
+    pub fn kind(&self) -> DeviceErrorKind {
         self.kind
     }
 
@@ -321,23 +321,23 @@ impl Error {
     }
 }
 
-impl From<ErrorKind> for Error {
-    fn from(value: ErrorKind) -> Self {
-        Error { kind: value, inner: None }
+impl From<DeviceErrorKind> for DeviceError {
+    fn from(value: DeviceErrorKind) -> Self {
+        DeviceError { kind: value, inner: None }
     }
 }
 
-impl From<io::Error> for Error {
+impl From<io::Error> for DeviceError {
     fn from(e: io::Error) -> Self {
         // Unwrap device error if it is one.
-        match e.downcast::<Error>() {
+        match e.downcast::<DeviceError>() {
             Ok(e) => e,
-            Err(e) => Error::other(e),
+            Err(e) => DeviceError::other(e),
         }
     }
 }
 
-impl fmt::Display for Error {
+impl fmt::Display for DeviceError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.inner {
             Some(e) => e.fmt(f),
@@ -346,11 +346,11 @@ impl fmt::Display for Error {
     }
 }
 
-impl error::Error for Error {}
+impl error::Error for DeviceError {}
 
 /// A specialized [`Result`](std::result::Result) type for [`Device`]
 /// operations.
-pub type Result<T> = std::result::Result<T, Error>;
+pub type DeviceResult<T> = std::result::Result<T, DeviceError>;
 
 /// A MIX peripheral device.
 ///
@@ -368,18 +368,18 @@ pub trait Device {
     /// the contents of index register `rX`; it is used only by devices whose
     /// transfers are addressed by block number (currently [`Disk`]) and is
     /// ignored otherwise.
-    fn input(&mut self, data: &mut [Word], block: Word) -> Result<()>;
+    fn input(&mut self, data: &mut [Word], block: Word) -> DeviceResult<()>;
 
     /// Performs an `OUT` instruction: writes `data` to the device.
     ///
     /// See [`Device::input`] for the meaning of `block` and the
     /// [`ErrorKind::InvalidBlockSize`] requirement on `data.len()`.
-    fn output(&mut self, data: &[Word], block: Word) -> Result<()>;
+    fn output(&mut self, data: &[Word], block: Word) -> DeviceResult<()>;
 
     /// Performs an `IOC` instruction, whose effect is device-specific (see
     /// each device's [`Device`] impl). `arg` carries the instruction's
     /// address field `M`; `block` carries `rX`, as in [`Device::input`].
-    fn control(&mut self, arg: Short, block: Word) -> Result<()>;
+    fn control(&mut self, arg: Short, block: Word) -> DeviceResult<()>;
 
     /// Returns whether the device is ready, i.e., not busy with a previous
     /// operation (as tested by `JRED`/`JBUS`).
@@ -387,7 +387,7 @@ pub trait Device {
     /// Because every device here completes its work synchronously before
     /// returning from [`Device::input`], [`Device::output`], and
     /// [`Device::control`], this always returns `Ok(true)`.
-    fn ready(&self) -> Result<bool>;
+    fn ready(&self) -> DeviceResult<bool>;
 }
 
 /// Write words in binary format.
@@ -395,7 +395,7 @@ fn write_words(
     kind: DeviceKind,
     mut w: impl Write,
     src: &[Word],
-) -> Result<()> {
+) -> DeviceResult<()> {
     kind.validate_block_size(src)?;
 
     for word in src {
@@ -410,14 +410,14 @@ fn read_words(
     kind: DeviceKind,
     mut r: impl Read,
     dest: &mut [Word],
-) -> Result<()> {
+) -> DeviceResult<()> {
     kind.validate_block_size(dest)?;
 
     for word in dest {
         *word = Word::decode(&mut r).map_err(|e| {
             match e.downcast::<EncodingError>() {
-                Ok(_) => Error::from(ErrorKind::InvalidInputWord),
-                Err(e) => Error::other(e),
+                Ok(_) => DeviceError::from(DeviceErrorKind::InvalidInputWord),
+                Err(e) => DeviceError::other(e),
             }
         })?;
     }
@@ -430,7 +430,7 @@ fn write_chars(
     kind: DeviceKind,
     mut w: impl Write,
     src: &[Word],
-) -> Result<()> {
+) -> DeviceResult<()> {
     kind.validate_block_size(src)?;
 
     for word in src {
@@ -439,8 +439,9 @@ fn write_chars(
         let mut utf8_offset = 0;
 
         for byte in bytes {
-            let c = Char::try_from(byte)
-                .map_err(|_| Error::from(ErrorKind::InvalidOutputChar))?;
+            let c = Char::try_from(byte).map_err(|_| {
+                DeviceError::from(DeviceErrorKind::InvalidOutputChar)
+            })?;
 
             utf8_offset += c.encode_utf8(&mut utf8[utf8_offset..]).len();
         }
@@ -453,9 +454,9 @@ fn write_chars(
 }
 
 /// Take the input char and convert it to a mix byte, or give a device error.
-fn input_char_to_mix_byte(c: char) -> Result<Byte> {
+fn input_char_to_mix_byte(c: char) -> DeviceResult<Byte> {
     Char::from_unicode_with_replacement(c)
-        .ok_or_else(|| Error::from(ErrorKind::InvalidInputChar))
+        .ok_or_else(|| DeviceError::from(DeviceErrorKind::InvalidInputChar))
         .map(Into::into)
 }
 
@@ -469,7 +470,7 @@ fn read_chars(
     mut r: impl BufRead,
     mut dest: &mut [Word],
     buf: &mut String,
-) -> Result<()> {
+) -> DeviceResult<()> {
     kind.validate_block_size(dest)?;
 
     // Prepare line.
@@ -543,15 +544,15 @@ impl<I: Read + Write + Seek + ?Sized> Device for Tape<I> {
         DeviceKind::Tape
     }
 
-    fn input(&mut self, data: &mut [Word], _block: Word) -> Result<()> {
+    fn input(&mut self, data: &mut [Word], _block: Word) -> DeviceResult<()> {
         read_words(self.kind(), self.get_mut(), data)
     }
 
-    fn output(&mut self, data: &[Word], _block: Word) -> Result<()> {
+    fn output(&mut self, data: &[Word], _block: Word) -> DeviceResult<()> {
         write_words(self.kind(), self.get_mut(), data)
     }
 
-    fn control(&mut self, arg: Short, _block: Word) -> Result<()> {
+    fn control(&mut self, arg: Short, _block: Word) -> DeviceResult<()> {
         let byte_offset = i64::from(arg)
             * (self.kind().block_size() * WORD_ENCODED_LEN) as i64;
 
@@ -569,7 +570,7 @@ impl<I: Read + Write + Seek + ?Sized> Device for Tape<I> {
         Ok(())
     }
 
-    fn ready(&self) -> Result<bool> {
+    fn ready(&self) -> DeviceResult<bool> {
         Ok(true)
     }
 }
@@ -606,7 +607,7 @@ impl<I: Read + Write + Seek + ?Sized> Disk<I> {
         &mut self.inner
     }
 
-    fn set_block(&mut self, block: Word) -> Result<()> {
+    fn set_block(&mut self, block: Word) -> DeviceResult<()> {
         let byte_offset = i64::from(block).unsigned_abs()
             * (self.kind().block_size() * WORD_ENCODED_LEN) as u64;
 
@@ -620,21 +621,21 @@ impl<I: Read + Write + Seek + ?Sized> Device for Disk<I> {
         DeviceKind::Disk
     }
 
-    fn input(&mut self, data: &mut [Word], block: Word) -> Result<()> {
+    fn input(&mut self, data: &mut [Word], block: Word) -> DeviceResult<()> {
         self.set_block(block)?;
         read_words(self.kind(), self.get_mut(), data)
     }
 
-    fn output(&mut self, data: &[Word], block: Word) -> Result<()> {
+    fn output(&mut self, data: &[Word], block: Word) -> DeviceResult<()> {
         self.set_block(block)?;
         write_words(self.kind(), self.get_mut(), data)
     }
 
-    fn control(&mut self, _arg: Short, block: Word) -> Result<()> {
+    fn control(&mut self, _arg: Short, block: Word) -> DeviceResult<()> {
         self.set_block(block)
     }
 
-    fn ready(&self) -> Result<bool> {
+    fn ready(&self) -> DeviceResult<bool> {
         Ok(true)
     }
 }
@@ -676,19 +677,19 @@ impl<I: BufRead + ?Sized> Device for CardReader<I> {
         DeviceKind::CardReader
     }
 
-    fn input(&mut self, data: &mut [Word], _block: Word) -> Result<()> {
+    fn input(&mut self, data: &mut [Word], _block: Word) -> DeviceResult<()> {
         read_chars(self.kind(), &mut self.inner, data, &mut self.buf)
     }
 
-    fn output(&mut self, _data: &[Word], _block: Word) -> Result<()> {
-        Err(Error::from(ErrorKind::OutputUnsupported))
+    fn output(&mut self, _data: &[Word], _block: Word) -> DeviceResult<()> {
+        Err(DeviceError::from(DeviceErrorKind::OutputUnsupported))
     }
 
-    fn control(&mut self, _arg: Short, _block: Word) -> Result<()> {
+    fn control(&mut self, _arg: Short, _block: Word) -> DeviceResult<()> {
         Ok(())
     }
 
-    fn ready(&self) -> Result<bool> {
+    fn ready(&self) -> DeviceResult<bool> {
         Ok(true)
     }
 }
@@ -729,19 +730,19 @@ impl<I: Write + ?Sized> Device for CardPunch<I> {
         DeviceKind::CardPunch
     }
 
-    fn input(&mut self, _data: &mut [Word], _block: Word) -> Result<()> {
-        Err(Error::from(ErrorKind::InputUnsupported))
+    fn input(&mut self, _data: &mut [Word], _block: Word) -> DeviceResult<()> {
+        Err(DeviceError::from(DeviceErrorKind::InputUnsupported))
     }
 
-    fn output(&mut self, data: &[Word], _block: Word) -> Result<()> {
+    fn output(&mut self, data: &[Word], _block: Word) -> DeviceResult<()> {
         write_chars(self.kind(), self.get_mut(), data)
     }
 
-    fn control(&mut self, _arg: Short, _block: Word) -> Result<()> {
+    fn control(&mut self, _arg: Short, _block: Word) -> DeviceResult<()> {
         Ok(())
     }
 
-    fn ready(&self) -> Result<bool> {
+    fn ready(&self) -> DeviceResult<bool> {
         Ok(true)
     }
 }
@@ -784,20 +785,20 @@ impl<I: Write + ?Sized> Device for LinePrinter<I> {
         DeviceKind::LinePrinter
     }
 
-    fn input(&mut self, _data: &mut [Word], _block: Word) -> Result<()> {
-        Err(Error::from(ErrorKind::InputUnsupported))
+    fn input(&mut self, _data: &mut [Word], _block: Word) -> DeviceResult<()> {
+        Err(DeviceError::from(DeviceErrorKind::InputUnsupported))
     }
 
-    fn output(&mut self, data: &[Word], _block: Word) -> Result<()> {
+    fn output(&mut self, data: &[Word], _block: Word) -> DeviceResult<()> {
         write_chars(self.kind(), self.get_mut(), data)
     }
 
-    fn control(&mut self, _arg: Short, _block: Word) -> Result<()> {
+    fn control(&mut self, _arg: Short, _block: Word) -> DeviceResult<()> {
         self.inner.write_all(b"\n")?;
         Ok(())
     }
 
-    fn ready(&self) -> Result<bool> {
+    fn ready(&self) -> DeviceResult<bool> {
         Ok(true)
     }
 }
@@ -839,19 +840,19 @@ impl<I: BufRead + Write + ?Sized> Device for Terminal<I> {
         DeviceKind::Terminal
     }
 
-    fn input(&mut self, data: &mut [Word], _block: Word) -> Result<()> {
+    fn input(&mut self, data: &mut [Word], _block: Word) -> DeviceResult<()> {
         read_chars(self.kind(), &mut self.inner, data, &mut self.buf)
     }
 
-    fn output(&mut self, data: &[Word], _block: Word) -> Result<()> {
+    fn output(&mut self, data: &[Word], _block: Word) -> DeviceResult<()> {
         write_chars(self.kind(), &mut self.inner, data)
     }
 
-    fn control(&mut self, _arg: Short, _block: Word) -> Result<()> {
+    fn control(&mut self, _arg: Short, _block: Word) -> DeviceResult<()> {
         Ok(())
     }
 
-    fn ready(&self) -> Result<bool> {
+    fn ready(&self) -> DeviceResult<bool> {
         Ok(true)
     }
 }
@@ -895,20 +896,20 @@ impl<I: BufRead + Write + Seek + ?Sized> Device for PaperTape<I> {
         DeviceKind::PaperTape
     }
 
-    fn input(&mut self, data: &mut [Word], _block: Word) -> Result<()> {
+    fn input(&mut self, data: &mut [Word], _block: Word) -> DeviceResult<()> {
         read_chars(self.kind(), &mut self.inner, data, &mut self.buf)
     }
 
-    fn output(&mut self, data: &[Word], _block: Word) -> Result<()> {
+    fn output(&mut self, data: &[Word], _block: Word) -> DeviceResult<()> {
         write_chars(self.kind(), self.get_mut(), data)
     }
 
-    fn control(&mut self, _arg: Short, _block: Word) -> Result<()> {
+    fn control(&mut self, _arg: Short, _block: Word) -> DeviceResult<()> {
         self.inner.rewind()?;
         Ok(())
     }
 
-    fn ready(&self) -> Result<bool> {
+    fn ready(&self) -> DeviceResult<bool> {
         Ok(true)
     }
 }
@@ -923,13 +924,13 @@ mod tests {
 
     #[test]
     fn error_reports_kind_and_source() {
-        let e = Error::new(ErrorKind::InvalidInputChar, "boom");
-        assert_eq!(e.kind(), ErrorKind::InvalidInputChar);
+        let e = DeviceError::new(DeviceErrorKind::InvalidInputChar, "boom");
+        assert_eq!(e.kind(), DeviceErrorKind::InvalidInputChar);
         assert!(e.get_ref().is_some());
         assert_eq!(e.to_string(), "boom");
 
-        let e = Error::from(ErrorKind::Other);
-        assert_eq!(e.kind(), ErrorKind::Other);
+        let e = DeviceError::from(DeviceErrorKind::Other);
+        assert_eq!(e.kind(), DeviceErrorKind::Other);
         assert!(e.get_ref().is_none());
         assert_eq!(e.to_string(), "other");
     }
@@ -949,7 +950,7 @@ mod tests {
 
         let mut short = vec![Word::POS_ZERO; 3];
         let err = tape.input(&mut short, Word::POS_ZERO).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidBlockSize);
+        assert_eq!(err.kind(), DeviceErrorKind::InvalidBlockSize);
     }
 
     #[test]
@@ -1028,7 +1029,7 @@ mod tests {
         }
 
         let err = reader.output(&[], Word::POS_ZERO).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::OutputUnsupported);
+        assert_eq!(err.kind(), DeviceErrorKind::OutputUnsupported);
     }
 
     #[test]
@@ -1048,7 +1049,7 @@ mod tests {
         let mut punch = CardPunch::new(io::Cursor::new(Vec::<u8>::new()));
         let mut buf = vec![Word::POS_ZERO; 16];
         let err = punch.input(&mut buf, Word::POS_ZERO).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InputUnsupported);
+        assert_eq!(err.kind(), DeviceErrorKind::InputUnsupported);
     }
 
     #[test]
@@ -1056,7 +1057,7 @@ mod tests {
         let mut printer = LinePrinter::new(io::Cursor::new(Vec::<u8>::new()));
         let mut buf = vec![Word::POS_ZERO; 24];
         let err = printer.input(&mut buf, Word::POS_ZERO).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InputUnsupported);
+        assert_eq!(err.kind(), DeviceErrorKind::InputUnsupported);
     }
 
     #[test]
