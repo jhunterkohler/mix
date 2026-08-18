@@ -3,6 +3,7 @@ use std::fmt;
 use std::mem;
 
 use crate::asm::Op;
+use crate::num::Sign;
 use crate::num::{Byte, Short, Word};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,8 +18,11 @@ impl fmt::Display for InvalidInstructionIndexError {
 impl error::Error for InvalidInstructionIndexError {}
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default,
+)]
 pub enum InstructionIndex {
+    #[default]
     None = 0,
     I1 = 1,
     I2 = 2,
@@ -93,7 +97,7 @@ impl fmt::Display for InvalidInstructionError {
 impl error::Error for InvalidInstructionError {}
 
 /// A MIX instruction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Instruction {
     op: Op,
     field: Byte,
@@ -102,6 +106,10 @@ pub struct Instruction {
 }
 
 impl Instruction {
+    pub const fn sign(&self) -> Sign {
+        self.address.sign()
+    }
+
     pub const fn op(&self) -> Op {
         self.op
     }
