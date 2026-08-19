@@ -228,7 +228,7 @@ impl Decode for SymbolName {
     fn decode<R: io::Read>(mut r: R) -> io::Result<Self> {
         let len = u8::decode(&mut r)? as usize;
         if len < 1 || len > 10 {
-            return Err(io::Error::other(EncodingError));
+            return Err(EncodingError::in_io_error());
         }
 
         let mut buf = [0; 10];
@@ -236,7 +236,7 @@ impl Decode for SymbolName {
             .map_err(EncodingError::replace_unexpected_eof)?;
 
         SymbolName::from_bytes(&buf[0..len])
-            .map_err(|_| io::Error::other(EncodingError))
+            .map_err(|_| EncodingError::in_io_error())
     }
 }
 
@@ -331,7 +331,7 @@ impl Decode for SymbolIndex {
         if repr < 10 {
             Ok(Self(repr))
         } else {
-            Err(io::Error::other(EncodingError))
+            Err(EncodingError::in_io_error())
         }
     }
 }
