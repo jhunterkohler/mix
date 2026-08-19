@@ -376,6 +376,6 @@ impl Encode for Char {
 impl Decode for Char {
     fn decode<R: io::Read>(r: R) -> io::Result<Self> {
         Char::try_from(u8::decode(r)?)
-            .map_err(|_| io::Error::other(EncodingError))
+            .map_err(|_| EncodingError::in_io_error())
     }
 }

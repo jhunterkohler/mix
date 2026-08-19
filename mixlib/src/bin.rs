@@ -38,7 +38,7 @@ pub(crate) trait Decode: Sized {
 
 /// Error returned when decoding encounters malformed or truncated input.
 #[derive(Clone, Copy, Debug)]
-pub struct EncodingError;
+pub struct EncodingError(pub(crate) ());
 
 impl EncodingError {
     /// Inspects `e` and, if its kind is [`io::ErrorKind::UnexpectedEof`],
@@ -47,9 +47,13 @@ impl EncodingError {
     /// impls.
     pub(crate) fn replace_unexpected_eof(e: io::Error) -> io::Error {
         match e.kind() {
-            io::ErrorKind::UnexpectedEof => io::Error::other(EncodingError),
+            io::ErrorKind::UnexpectedEof => EncodingError::in_io_error(),
             _ => e,
         }
+    }
+
+    pub(crate) fn in_io_error() -> io::Error {
+        io::Error::other(EncodingError(()))
     }
 }
 
@@ -161,7 +165,7 @@ impl Encode for bool {
 impl Decode for bool {
     fn decode<R: io::Read>(r: R) -> io::Result<Self> {
         bool::try_from(u8::decode(r)?)
-            .map_err(|_| io::Error::other(EncodingError))
+            .map_err(|_| EncodingError::in_io_error())
     }
 }
 
@@ -213,7 +217,7 @@ impl<T: Decode> Decode for Vec<T> {
             }
             Ok(dest)
         } else {
-            Err(io::Error::other(EncodingError))
+            Err(EncodingError::in_io_error())
         }
     }
 }
@@ -248,13 +252,13 @@ impl<K: Decode + Hash + Eq, V: Decode> Decode for HashMap<K, V> {
 
                 // Error on duplicate keys.
                 if dest.insert(k, v).is_some() {
-                    return Err(io::Error::other(EncodingError));
+                    return Err(EncodingError::in_io_error());
                 }
             }
 
             Ok(dest)
         } else {
-            Err(io::Error::other(EncodingError))
+            Err(EncodingError::in_io_error())
         }
     }
 }
@@ -282,7 +286,7 @@ impl Encode for String {
 impl Decode for String {
     fn decode<R: io::Read>(r: R) -> io::Result<Self> {
         String::from_utf8(Vec::<u8>::decode(r)?)
-            .map_err(|_| io::Error::other(EncodingError))
+            .map_err(|_| EncodingError::in_io_error())
     }
 }
 
