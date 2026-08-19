@@ -5,20 +5,32 @@
 //! not all MIX systems have this.
 
 use std::cmp::Ordering;
-use std::fmt;
-use std::fmt::Write;
-use std::hash::Hash;
-use std::hash::Hasher;
+use std::error;
+use std::fmt::{self, Write as _};
+use std::hash::{Hash, Hasher};
 use std::io;
-use std::mem::transmute;
+use std::mem;
 use std::ops::{Mul, Neg};
 
 use crate::bin::{Decode, Encode, EncodingError};
-
-mod convert;
-pub use convert::*;
+use crate::mem::MemoryAddress;
 
 pub mod machine;
+mod repr;
+
+pub(crate) use repr::*;
+
+/// An error that can be returned when converting to between integral types.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct TryFromIntError(pub(crate) ());
+
+impl fmt::Display for TryFromIntError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("out of range integral type conversion")
+    }
+}
+
+impl error::Error for TryFromIntError {}
 
 /// Enumeration representing numeric signs.
 #[repr(u8)]
@@ -46,7 +58,7 @@ impl Mul for Sign {
     /// assert_eq!(Sign::Minus * Sign::Minus, Sign::Plus);
     /// ```
     fn mul(self, rhs: Self) -> Self::Output {
-        unsafe { transmute(self as u8 ^ rhs as u8) }
+        unsafe { mem::transmute(self as u8 ^ rhs as u8) }
     }
 }
 
@@ -64,7 +76,7 @@ impl Neg for Sign {
     /// assert_eq!(-Sign::Minus, Sign::Plus);
     /// ```
     fn neg(self) -> Self::Output {
-        unsafe { transmute(1 - self as u8) }
+        unsafe { mem::transmute(1 - self as u8) }
     }
 }
 
@@ -202,6 +214,38 @@ impl Byte {
     const VALUE_MASK: u8 = (1 << 6) - 1;
 }
 
+impl_int_repr! {
+    int = Byte,
+    repr = u8,
+    to_repr = Byte::to_u8,
+    from_repr = Byte::from_u8,
+    from_repr_unchecked = Byte::from_u8_unchecked,
+    from = [],
+    into = [u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize],
+    try_from = [u8, u16, u32, u64, u128, usize, i8, i16, i32, i128, isize,
+        Short, Word, MemoryAddress, LocationCounter],
+    try_into = [],
+}
+
+impl TryFrom<Word> for Short {
+    type Error = TryFromIntError;
+
+    fn try_from(value: Word) -> Result<Self, Self::Error> {
+        const BAD_BITS: u32 = Word::VALUE_MASK & !(Short::VALUE_MASK as u32);
+
+        if value.0 & BAD_BITS != 0 {
+            return Err(TryFromIntError(()));
+        }
+
+        let sign_bit = (value.mask_sign() >> 18) as u16;
+
+        // Sign bit is cut off by the cast.
+        let value_bits = value.0 as u16;
+
+        Ok(Short(sign_bit | value_bits))
+    }
+}
+
 impl fmt::Display for Byte {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.0.fmt(f)
@@ -217,7 +261,7 @@ impl Encode for Byte {
 impl Decode for Byte {
     fn decode<R: io::Read>(r: R) -> io::Result<Self> {
         Byte::from_u8(u8::decode(r)?)
-            .ok_or_else(|| io::Error::other(EncodingError))
+            .ok_or_else(|| EncodingError::in_io_error())
     }
 }
 
@@ -417,7 +461,7 @@ impl Short {
     /// assert_eq!(Short::NEG_ZERO.sign(), Sign::Minus);
     /// ```
     pub const fn sign(self) -> Sign {
-        unsafe { transmute(((self.mask_sign()) >> 12) as u8) }
+        unsafe { mem::transmute(((self.mask_sign()) >> 12) as u8) }
     }
 
     /// Returns the magnitude of `self`.
@@ -669,10 +713,24 @@ impl Short {
     const fn const_neg(self) -> Short {
         Short(self.0 ^ Short::SIGN_MASK)
     }
+}
 
-    pub(crate) const fn zero_extend_to_word(self) -> Word {
-        let sign_bit = (self.mask_sign() as u32) << 18;
-        let value_bits = self.mask_value() as u32;
+impl_int_repr! {
+    int = Short,
+    repr = i16,
+    to_repr = Short::to_i16,
+    from_repr = Short::from_i16,
+    from_repr_unchecked = Short::from_i16_unchecked,
+    from = [u8, i8, Byte, MemoryAddress, LocationCounter],
+    into = [i16, i32, i64, i128],
+    try_from = [u16, u32, u64, u128, usize, i16, i32, i64, i128, isize],
+    try_into = [u8, u16, u32, u64, u128, usize, i8, isize],
+}
+
+impl From<Short> for Word {
+    fn from(value: Short) -> Self {
+        let sign_bit = (value.mask_sign() as u32) << 18;
+        let value_bits = value.mask_value() as u32;
 
         Word(sign_bit | value_bits)
     }
@@ -734,7 +792,7 @@ impl Decode for Short {
         if repr & !Short::MASK == 0 {
             Ok(Short(repr))
         } else {
-            Err(io::Error::other(EncodingError))
+            Err(EncodingError::in_io_error())
         }
     }
 }
@@ -944,7 +1002,7 @@ impl Word {
     /// assert_eq!(Word::MIN.sign(), Sign::Minus);
     /// ```
     pub const fn sign(self) -> Sign {
-        unsafe { transmute(((self.mask_sign()) >> 30) as u8) }
+        unsafe { mem::transmute(((self.mask_sign()) >> 30) as u8) }
     }
 
     /// Returns the magnitude of `self`.
@@ -1358,6 +1416,18 @@ impl Word {
     }
 }
 
+impl_int_repr! {
+    int = Word,
+    repr = i32,
+    to_repr = Word::to_i32,
+    from_repr = Word::from_i32,
+    from_repr_unchecked = Word::from_i32_unchecked,
+    from = [u8, u16, i8, i16, Byte, MemoryAddress, LocationCounter],
+    into = [i32, i64, i128],
+    try_from = [u32, u64, u128, usize, i32, i64, i128, isize],
+    try_into = [u8, u16, u32, u64, u128, usize, i8, i16, isize],
+}
+
 impl Neg for Word {
     type Output = Word;
 
@@ -1414,69 +1484,8 @@ impl Decode for Word {
         if repr & !Word::MASK == 0 {
             Ok(Word(repr))
         } else {
-            Err(io::Error::other(EncodingError))
+            Err(EncodingError::in_io_error())
         }
-    }
-}
-
-/// A MIX memory address.
-///
-/// Represents all valid MIX addresses: 0 to 3999.
-#[repr(transparent)]
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default, Hash,
-)]
-pub struct MemoryAddress(u16);
-
-impl MemoryAddress {
-    /// The minimum memory address. Equal to 0.
-    pub const MIN: MemoryAddress = MemoryAddress(0);
-
-    /// The maximum memory address. Equal to 3999.
-    pub const MAX: MemoryAddress = MemoryAddress(3999);
-
-    /// Converts a [`MemoryAddress`] to `u16`.
-    pub const fn to_u16(self) -> u16 {
-        self.0
-    }
-
-    /// Converts a `u16` to [`MemoryAddress`].
-    pub const fn from_u16(value: u16) -> Option<MemoryAddress> {
-        if value <= MemoryAddress::MAX.0 {
-            Some(MemoryAddress(value))
-        } else {
-            None
-        }
-    }
-
-    /// Converts an `u16` to a [`MemoryAddress`], ignoring validity.
-    ///
-    /// # Safety
-    ///
-    /// This results in undefined behavior if `value >
-    /// MemoryAddress::MAX.to_u16()`.
-    pub const unsafe fn from_u16_unchecked(value: u16) -> MemoryAddress {
-        debug_assert!(value <= MemoryAddress::MAX.0);
-        MemoryAddress(value)
-    }
-}
-
-impl fmt::Display for MemoryAddress {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl Encode for MemoryAddress {
-    fn encode<W: io::Write>(&self, w: W) -> io::Result<()> {
-        self.0.encode(w)
-    }
-}
-
-impl Decode for MemoryAddress {
-    fn decode<R: io::Read>(r: R) -> io::Result<Self> {
-        MemoryAddress::from_u16(u16::decode(r)?)
-            .ok_or_else(|| io::Error::other(EncodingError))
     }
 }
 
@@ -1501,35 +1510,54 @@ impl LocationCounter {
     /// to (2<sup>12</sup> &minus; 1).
     pub const MAX: LocationCounter = LocationCounter((1 << 12) - 1);
 
-    /// Converts a [`MemoryAddress`] to `u16`.
-    pub const fn to_u16(self) -> u16 {
-        self.0
+    /// Converts a [`MemoryAddress`] to `usize`.
+    pub const fn to_usize(self) -> usize {
+        self.0 as usize
     }
 
-    /// Converts a `u16` to [`MemoryAddress`].
-    pub const fn from_u16(value: u16) -> Option<LocationCounter> {
-        if value <= LocationCounter::MAX.0 {
-            Some(LocationCounter(value))
+    /// Converts a `usize` to [`MemoryAddress`].
+    pub const fn from_usize(value: usize) -> Option<LocationCounter> {
+        if value <= LocationCounter::MAX.to_usize() {
+            Some(LocationCounter(value as u16))
         } else {
             None
         }
     }
 
-    /// Converts an `u16` to a [`LocationCounter`], ignoring validity.
+    /// Converts an `usize` to a [`LocationCounter`], ignoring validity.
     ///
     /// # Safety
     ///
     /// This results in undefined behavior if `value >
-    /// LocationCounter::MAX.to_u16()`.
-    pub const unsafe fn from_u16_unchecked(value: u16) -> LocationCounter {
-        debug_assert!(value <= LocationCounter::MAX.0);
-        LocationCounter(value)
+    /// LocationCounter::MAX.to_usize()`.
+    pub const unsafe fn from_usize_unchecked(value: usize) -> LocationCounter {
+        debug_assert!(value <= LocationCounter::MAX.to_usize());
+        LocationCounter(value as u16)
     }
 
     pub const fn location_after(address: MemoryAddress) -> LocationCounter {
         // SAFETY: MemoryAddress::MAX + 1 = 4000 < 4095 = LocationCounter::MAX
-        unsafe { LocationCounter::from_u16_unchecked(address.to_u16() + 1) }
+        unsafe {
+            LocationCounter::from_usize_unchecked(address.to_usize() + 1)
+        }
     }
+
+    pub const fn increment(self) -> Option<LocationCounter> {
+        LocationCounter::from_usize(self.to_usize() + 1)
+    }
+}
+
+impl_int_repr! {
+    int = LocationCounter,
+    repr = usize,
+    to_repr = LocationCounter::to_usize,
+    from_repr = LocationCounter::from_usize,
+    from_repr_unchecked = LocationCounter::from_usize_unchecked,
+    from = [u8, MemoryAddress],
+    into = [u16, u32, u128, usize, i16, i32, i128, isize],
+    try_from = [u16, u32, u128, usize, i8, i16, i32, i64, i128, isize, Short,
+        Word],
+    try_into = [u8, i8],
 }
 
 impl fmt::Display for LocationCounter {
@@ -1546,8 +1574,8 @@ impl Encode for LocationCounter {
 
 impl Decode for LocationCounter {
     fn decode<R: io::Read>(r: R) -> io::Result<Self> {
-        LocationCounter::from_u16(u16::decode(r)?)
-            .ok_or_else(|| io::Error::other(EncodingError))
+        LocationCounter::from_usize(u16::decode(r)? as usize)
+            .ok_or_else(EncodingError::in_io_error)
     }
 }
 
@@ -1590,6 +1618,14 @@ const FIELD_SPEC_MASKS: [Option<FieldSpecMasks>; 64] = {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InvalidFieldSpecError(());
+
+impl fmt::Display for InvalidFieldSpecError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("invalid field specification")
+    }
+}
+
+impl error::Error for InvalidFieldSpecError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FieldSpec {
