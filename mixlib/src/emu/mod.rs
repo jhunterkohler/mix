@@ -4,43 +4,40 @@ use std::fmt;
 use std::hash::Hash;
 use std::ops::Neg;
 
-use crate::asm::Instruction;
-use crate::asm::InstructionIndex;
-use crate::asm::InvalidInstructionError;
-use crate::asm::Op;
-use crate::asm::OpCode;
-use crate::asm::OpFieldKind;
-use crate::asm::Program;
-use crate::num;
-use crate::num::FieldSpec;
-use crate::num::LocationCounter;
-use crate::num::Word;
-use crate::num::{MemoryAddress, Short};
+use crate::asm::{Instruction, InstructionIndex};
+use crate::asm::{InvalidInstructionError, Op};
+use crate::asm::{OpCode, Program};
+use crate::dev::DeviceUnit;
+use crate::emu::bus::MemoryAccessError;
+use crate::mem::MemoryAddress;
+use crate::num::{self, FieldSpec, LocationCounter, Short, Word};
 
 mod breakpoints;
-mod dev;
+mod bus;
 mod machine;
-mod memory;
 mod register;
 
 pub use breakpoints::*;
-pub use dev::*;
 pub use machine::*;
-pub use memory::*;
 pub use register::*;
 
 #[derive(Debug)]
 pub enum ErrorKind {
-    WrongDeviceKind(DeviceUnit),
-    DeviceError(dev::DeviceError),
     InvalidInstruction(InvalidInstructionError),
+    IndexingOverflow,
+    LoadIndexOverflow,
+    IncIndexOverflow,
+    NegativeShift,
     LocationOutOfBounds,
     ReadOutOfBounds(Short),
     WriteOutOfBounds(Short),
-    IndexingOverflow,
-    NegativeShift,
-    LoadIndexOverflow,
-    IncIndexOverflow,
+    DeviceReadOutOfBounds(Short),
+    DeviceWriteOutOfBounds(Short),
+    DeviceOutputUnsupported,
+    DeviceInputUnsupported,
+    ReadMemoryDeviceConflict(DeviceUnit),
+    WriteMemoryDeviceConflict(DeviceUnit),
+    NoDevice(DeviceUnit),
 }
 
 #[derive(Debug)]
@@ -75,7 +72,7 @@ pub enum StopReason {
     Breakpoint,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Emulator {
     machine: Machine,
     clock: u64,
@@ -184,8 +181,7 @@ impl Emulator {
         self.bm.bump_active_breakpoints();
 
         // Track location after bumping active to not break repeatedly.
-        let location = self.machine.location();
-        self.track().location(location);
+        self.bm.track_location(&self.machine, self.machine.location());
 
         if self.bm.has_active() { Some(StopReason::Breakpoint) } else { None }
     }
@@ -195,7 +191,7 @@ impl Emulator {
         self.inst_location = MemoryAddress::try_from(self.machine.location())
             .map_err(|_| self.make_error(ErrorKind::LocationOutOfBounds))?;
 
-        let inst_word = self.mem_read_word(self.inst_location);
+        let inst_word = self.try_mem_read(self.inst_location, None)?;
         self.inst = Instruction::try_from(inst_word)
             .map_err(|e| self.make_error(ErrorKind::InvalidInstruction(e)))?;
 
@@ -218,174 +214,291 @@ impl Emulator {
         }
     }
 
-    #[rustfmt::skip]
+    /// Dispatch current operation.
     fn dispatch_op(&mut self) -> Result<()> {
-        // Dispatch operation.
-        match self.inst.op() {
-            Op::NOP => {}
-            Op::ADD => self.op_add_sub(false)?,
-            Op::FADD => self.op_fadd_fsub(false)?,
-            Op::SUB => self.op_add_sub(true)?,
-            Op::FSUB => self.op_fadd_fsub(true)?,
-            Op::MUL => self.op_mul()?,
-            Op::FMUL => self.op_fmul()?,
-            Op::DIV => self.op_div()?,
-            Op::FDIV => self.op_fdiv()?,
-            Op::NUM => self.op_num(),
-            Op::CHAR => self.op_char(),
-            Op::HLT => {}
-            Op::FLOT => self.op_flot()?,
-            Op::FIX => self.op_fix()?,
-            Op::SLA => self.op_shift_a(num::machine::sla)?,
-            Op::SRA => self.op_shift_a(num::machine::sra)?,
-            Op::SLAX => self.op_shift_ax(num::machine::slax)?,
-            Op::SRAX => self.op_shift_ax(num::machine::srax)?,
-            Op::SLC => self.op_shift_ax(num::machine::slc)?,
-            Op::SRC => self.op_shift_ax(num::machine::src)?,
-            Op::SLB => self.op_shift_ax(num::machine::slb)?,
-            Op::SRB => self.op_shift_ax(num::machine::srb)?,
-            Op::MOVE => self.op_move()?,
-            Op::LDA => self.op_load_word(WordReg::A, false)?,
-            Op::LD1 => self.op_load_index(IndexReg::I1, false)?,
-            Op::LD2 => self.op_load_index(IndexReg::I2, false)?,
-            Op::LD3 => self.op_load_index(IndexReg::I3, false)?,
-            Op::LD4 => self.op_load_index(IndexReg::I4, false)?,
-            Op::LD5 => self.op_load_index(IndexReg::I5, false)?,
-            Op::LD6 => self.op_load_index(IndexReg::I6, false)?,
-            Op::LDX => self.op_load_word(WordReg::X, false)?,
-            Op::LDAN => self.op_load_word(WordReg::A, true)?,
-            Op::LD1N => self.op_load_index(IndexReg::I1, true)?,
-            Op::LD2N => self.op_load_index(IndexReg::I2, true)?,
-            Op::LD3N => self.op_load_index(IndexReg::I3, true)?,
-            Op::LD4N => self.op_load_index(IndexReg::I4, true)?,
-            Op::LD5N => self.op_load_index(IndexReg::I5, true)?,
-            Op::LD6N => self.op_load_index(IndexReg::I6, true)?,
-            Op::LDXN => self.op_load_word(WordReg::X, true)?,
-            Op::STA => self.op_store_word(WordReg::A)?,
-            Op::ST1 => self.op_store_index(IndexReg::I1)?,
-            Op::ST2 => self.op_store_index(IndexReg::I2)?,
-            Op::ST3 => self.op_store_index(IndexReg::I3)?,
-            Op::ST4 => self.op_store_index(IndexReg::I4)?,
-            Op::ST5 => self.op_store_index(IndexReg::I5)?,
-            Op::ST6 => self.op_store_index(IndexReg::I6)?,
-            Op::STX => self.op_store_word(WordReg::X)?,
-            Op::STJ => self.op_stj()?,
-            Op::STZ => self.op_stz()?,
-            Op::JBUS => self.op_jump_ready(false)?,
-            Op::IOC => self.op_ioc()?,
-            Op::IN => self.op_in()?,
-            Op::OUT => self.op_out()?,
-            Op::JRED => self.op_jump_ready(true)?,
-            Op::JMP => self.jump_for_inst(),
-            Op::JSJ => self.op_jsj(),
-            Op::JOV => self.op_jump_overflow(true),
-            Op::JNOV => self.op_jump_overflow(false),
-            Op::JL => self.op_jump_cmp_cond(Ordering::is_lt),
-            Op::JE => self.op_jump_cmp_cond(Ordering::is_eq),
-            Op::JG => self.op_jump_cmp_cond(Ordering::is_gt),
-            Op::JGE => self.op_jump_cmp_cond(Ordering::is_ge),
-            Op::JNE => self.op_jump_cmp_cond(Ordering::is_ne),
-            Op::JLE => self.op_jump_cmp_cond(Ordering::is_le),
-            Op::JAN => self.op_jump_word(WordReg::A, Word::is_negative, false),
-            Op::JAZ => self.op_jump_word(WordReg::A, Word::is_zero, false),
-            Op::JAP => self.op_jump_word(WordReg::A, Word::is_positive, false),
-            Op::JANN => self.op_jump_word(WordReg::A, Word::is_negative, true),
-            Op::JANZ => self.op_jump_word(WordReg::A, Word::is_zero, true),
-            Op::JANP => self.op_jump_word(WordReg::A, Word::is_positive, true),
-            Op::JAE => self.op_jump_word(WordReg::A, Word::is_even, false),
-            Op::JAO => self.op_jump_word(WordReg::A, Word::is_even, true),
-            Op::J1N => self.op_jump_index(IndexReg::I1, Short::is_negative, false),
-            Op::J1Z => self.op_jump_index(IndexReg::I1, Short::is_zero, false),
-            Op::J1P => self.op_jump_index(IndexReg::I1, Short::is_positive, false),
-            Op::J1NN => self.op_jump_index(IndexReg::I1, Short::is_negative, true),
-            Op::J1NZ => self.op_jump_index(IndexReg::I1, Short::is_zero, true),
-            Op::J1NP => self.op_jump_index(IndexReg::I1, Short::is_positive, true),
-            Op::J2N => self.op_jump_index(IndexReg::I2, Short::is_negative, false),
-            Op::J2Z => self.op_jump_index(IndexReg::I2, Short::is_zero, false),
-            Op::J2P => self.op_jump_index(IndexReg::I2, Short::is_positive, false),
-            Op::J2NN => self.op_jump_index(IndexReg::I2, Short::is_negative, true),
-            Op::J2NZ => self.op_jump_index(IndexReg::I2, Short::is_zero, true),
-            Op::J2NP => self.op_jump_index(IndexReg::I2, Short::is_positive, true),
-            Op::J3N => self.op_jump_index(IndexReg::I3, Short::is_negative, false),
-            Op::J3Z => self.op_jump_index(IndexReg::I3, Short::is_zero, false),
-            Op::J3P => self.op_jump_index(IndexReg::I3, Short::is_positive, false),
-            Op::J3NN => self.op_jump_index(IndexReg::I3, Short::is_negative, true),
-            Op::J3NZ => self.op_jump_index(IndexReg::I3, Short::is_zero, true),
-            Op::J3NP => self.op_jump_index(IndexReg::I3, Short::is_positive, true),
-            Op::J4N => self.op_jump_index(IndexReg::I4, Short::is_negative, false),
-            Op::J4Z => self.op_jump_index(IndexReg::I4, Short::is_zero, false),
-            Op::J4P => self.op_jump_index(IndexReg::I4, Short::is_positive, false),
-            Op::J4NN => self.op_jump_index(IndexReg::I4, Short::is_negative, true),
-            Op::J4NZ => self.op_jump_index(IndexReg::I4, Short::is_zero, true),
-            Op::J4NP => self.op_jump_index(IndexReg::I4, Short::is_positive, true),
-            Op::J5N => self.op_jump_index(IndexReg::I5, Short::is_negative, false),
-            Op::J5Z => self.op_jump_index(IndexReg::I5, Short::is_zero, false),
-            Op::J5P => self.op_jump_index(IndexReg::I5, Short::is_positive, false),
-            Op::J5NN => self.op_jump_index(IndexReg::I5, Short::is_negative, true),
-            Op::J5NZ => self.op_jump_index(IndexReg::I5, Short::is_zero, true),
-            Op::J5NP => self.op_jump_index(IndexReg::I5, Short::is_positive, true),
-            Op::J6N => self.op_jump_index(IndexReg::I6, Short::is_negative, false),
-            Op::J6Z => self.op_jump_index(IndexReg::I6, Short::is_zero, false),
-            Op::J6P => self.op_jump_index(IndexReg::I6, Short::is_positive, false),
-            Op::J6NN => self.op_jump_index(IndexReg::I6, Short::is_negative, true),
-            Op::J6NZ => self.op_jump_index(IndexReg::I6, Short::is_zero, true),
-            Op::J6NP => self.op_jump_index(IndexReg::I6, Short::is_positive, true),
-            Op::JXN => self.op_jump_word(WordReg::X, Word::is_negative, false),
-            Op::JXZ => self.op_jump_word(WordReg::X, Word::is_zero, false),
-            Op::JXP => self.op_jump_word(WordReg::X, Word::is_positive, false),
-            Op::JXNN => self.op_jump_word(WordReg::X, Word::is_negative, true),
-            Op::JXNZ => self.op_jump_word(WordReg::X, Word::is_zero, true),
-            Op::JXNP => self.op_jump_word(WordReg::X, Word::is_positive, true),
-            Op::JXE => self.op_jump_word(WordReg::X, Word::is_even, false),
-            Op::JXO => self.op_jump_word(WordReg::X, Word::is_even, true),
-            Op::INCA => self.op_inc_dec_word(WordReg::A, false),
-            Op::DECA => self.op_inc_dec_word(WordReg::A, true),
-            Op::ENTA => self.op_ent_word(WordReg::A, false),
-            Op::ENNA => self.op_ent_word(WordReg::A, true),
-            Op::INC1 => self.op_inc_dec_index(IndexReg::I1, false)?,
-            Op::DEC1 => self.op_inc_dec_index(IndexReg::I1, true)?,
-            Op::ENT1 => self.op_ent_index(IndexReg::I1, false),
-            Op::ENN1 => self.op_ent_index(IndexReg::I1, true),
-            Op::INC2 => self.op_inc_dec_index(IndexReg::I2, false)?,
-            Op::DEC2 => self.op_inc_dec_index(IndexReg::I2, true)?,
-            Op::ENT2 => self.op_ent_index(IndexReg::I2, false),
-            Op::ENN2 => self.op_ent_index(IndexReg::I2, true),
-            Op::INC3 => self.op_inc_dec_index(IndexReg::I3, false)?,
-            Op::DEC3 => self.op_inc_dec_index(IndexReg::I3, true)?,
-            Op::ENT3 => self.op_ent_index(IndexReg::I3, false),
-            Op::ENN3 => self.op_ent_index(IndexReg::I3, true),
-            Op::INC4 => self.op_inc_dec_index(IndexReg::I4, false)?,
-            Op::DEC4 => self.op_inc_dec_index(IndexReg::I4, true)?,
-            Op::ENT4 => self.op_ent_index(IndexReg::I4, false),
-            Op::ENN4 => self.op_ent_index(IndexReg::I4, true),
-            Op::INC5 => self.op_inc_dec_index(IndexReg::I5, false)?,
-            Op::DEC5 => self.op_inc_dec_index(IndexReg::I5, true)?,
-            Op::ENT5 => self.op_ent_index(IndexReg::I5, false),
-            Op::ENN5 => self.op_ent_index(IndexReg::I5, true),
-            Op::INC6 => self.op_inc_dec_index(IndexReg::I6, false)?,
-            Op::DEC6 => self.op_inc_dec_index(IndexReg::I6, true)?,
-            Op::ENT6 => self.op_ent_index(IndexReg::I6, false),
-            Op::ENN6 => self.op_ent_index(IndexReg::I6, true),
-            Op::INCX => self.op_inc_dec_word(WordReg::A, false),
-            Op::DECX => self.op_inc_dec_word(WordReg::A, true),
-            Op::ENTX => self.op_ent_word(WordReg::X, false),
-            Op::ENNX => self.op_ent_word(WordReg::X, true),
-            Op::CMPA => self.op_cmp_word(WordReg::A)?,
-            Op::FCMP => self.op_fcmp()?,
-            Op::CMP1 => self.op_cmp_index(IndexReg::I1)?,
-            Op::CMP2 => self.op_cmp_index(IndexReg::I2)?,
-            Op::CMP3 => self.op_cmp_index(IndexReg::I3)?,
-            Op::CMP4 => self.op_cmp_index(IndexReg::I4)?,
-            Op::CMP5 => self.op_cmp_index(IndexReg::I5)?,
-            Op::CMP6 => self.op_cmp_index(IndexReg::I6)?,
-            Op::CMPX => self.op_cmp_word(WordReg::X)?,
+        use Instruction::*;
+
+        match self.inst {
+            NOP { .. } => {}
+            ADD { field, .. } => self.op_add_sub(field, false)?,
+            FADD { .. } => self.op_fadd_fsub(false)?,
+            SUB { field, .. } => self.op_add_sub(field, true)?,
+            FSUB { .. } => self.op_fadd_fsub(true)?,
+            MUL { field, .. } => self.op_mul(field)?,
+            FMUL { .. } => self.op_fmul()?,
+            DIV { field, .. } => self.op_div(field)?,
+            FDIV { .. } => self.op_fdiv()?,
+            NUM { .. } => self.op_num(),
+            CHAR { .. } => self.op_char(),
+            HLT { .. } => {}
+            FLOT { .. } => self.op_flot()?,
+            FIX { .. } => self.op_fix()?,
+            SLA { .. } => self.op_shift_a(num::machine::sla)?,
+            SRA { .. } => self.op_shift_a(num::machine::sra)?,
+            SLAX { .. } => self.op_shift_ax(num::machine::slax)?,
+            SRAX { .. } => self.op_shift_ax(num::machine::srax)?,
+            SLC { .. } => self.op_shift_ax(num::machine::slc)?,
+            SRC { .. } => self.op_shift_ax(num::machine::src)?,
+            SLB { .. } => self.op_shift_ax(num::machine::slb)?,
+            SRB { .. } => self.op_shift_ax(num::machine::srb)?,
+            MOVE { .. } => self.op_move()?,
+            LDA { field, .. } => {
+                self.op_load_word(field, WordReg::A, false)?
+            }
+            LD1 { field, .. } => {
+                self.op_load_index(field, IndexReg::I1, false)?
+            }
+            LD2 { field, .. } => {
+                self.op_load_index(field, IndexReg::I2, false)?
+            }
+            LD3 { field, .. } => {
+                self.op_load_index(field, IndexReg::I3, false)?
+            }
+            LD4 { field, .. } => {
+                self.op_load_index(field, IndexReg::I4, false)?
+            }
+            LD5 { field, .. } => {
+                self.op_load_index(field, IndexReg::I5, false)?
+            }
+            LD6 { field, .. } => {
+                self.op_load_index(field, IndexReg::I6, false)?
+            }
+            LDX { field, .. } => {
+                self.op_load_word(field, WordReg::X, false)?
+            }
+            LDAN { field, .. } => {
+                self.op_load_word(field, WordReg::A, true)?
+            }
+            LD1N { field, .. } => {
+                self.op_load_index(field, IndexReg::I1, true)?
+            }
+            LD2N { field, .. } => {
+                self.op_load_index(field, IndexReg::I2, true)?
+            }
+            LD3N { field, .. } => {
+                self.op_load_index(field, IndexReg::I3, true)?
+            }
+            LD4N { field, .. } => {
+                self.op_load_index(field, IndexReg::I4, true)?
+            }
+            LD5N { field, .. } => {
+                self.op_load_index(field, IndexReg::I5, true)?
+            }
+            LD6N { field, .. } => {
+                self.op_load_index(field, IndexReg::I6, true)?
+            }
+            LDXN { field, .. } => {
+                self.op_load_word(field, WordReg::X, true)?
+            }
+            STA { field, .. } => self.op_store_word(field, WordReg::A)?,
+            ST1 { field, .. } => self.op_store_index(field, IndexReg::I1)?,
+            ST2 { field, .. } => self.op_store_index(field, IndexReg::I2)?,
+            ST3 { field, .. } => self.op_store_index(field, IndexReg::I3)?,
+            ST4 { field, .. } => self.op_store_index(field, IndexReg::I4)?,
+            ST5 { field, .. } => self.op_store_index(field, IndexReg::I5)?,
+            ST6 { field, .. } => self.op_store_index(field, IndexReg::I6)?,
+            STX { field, .. } => self.op_store_word(field, WordReg::X)?,
+            STJ { field, .. } => self.op_stj(field)?,
+            STZ { field, .. } => self.op_stz(field),
+            JBUS { .. } => self.op_jump_ready(false)?,
+            IOC { .. } => self.op_ioc()?,
+            IN { .. } => self.op_in()?,
+            OUT { .. } => self.op_out()?,
+            JRED { .. } => self.op_jump_ready(true)?,
+            JMP { .. } => self.jump_for_inst(),
+            JSJ { .. } => self.op_jsj(),
+            JOV { .. } => self.op_jump_overflow(true),
+            JNOV { .. } => self.op_jump_overflow(false),
+            JL { .. } => self.op_jump_cmp_cond(Ordering::is_lt),
+            JE { .. } => self.op_jump_cmp_cond(Ordering::is_eq),
+            JG { .. } => self.op_jump_cmp_cond(Ordering::is_gt),
+            JGE { .. } => self.op_jump_cmp_cond(Ordering::is_ge),
+            JNE { .. } => self.op_jump_cmp_cond(Ordering::is_ne),
+            JLE { .. } => self.op_jump_cmp_cond(Ordering::is_le),
+            JAN { .. } => {
+                self.op_jump_word(WordReg::A, Word::is_negative, false)
+            }
+            JAZ { .. } => self.op_jump_word(WordReg::A, Word::is_zero, false),
+            JAP { .. } => {
+                self.op_jump_word(WordReg::A, Word::is_positive, false)
+            }
+            JANN { .. } => {
+                self.op_jump_word(WordReg::A, Word::is_negative, true)
+            }
+            JANZ { .. } => self.op_jump_word(WordReg::A, Word::is_zero, true),
+            JANP { .. } => {
+                self.op_jump_word(WordReg::A, Word::is_positive, true)
+            }
+            JAE { .. } => self.op_jump_word(WordReg::A, Word::is_even, false),
+            JAO { .. } => self.op_jump_word(WordReg::A, Word::is_even, true),
+            J1N { .. } => {
+                self.op_jump_index(IndexReg::I1, Short::is_negative, false)
+            }
+            J1Z { .. } => {
+                self.op_jump_index(IndexReg::I1, Short::is_zero, false)
+            }
+            J1P { .. } => {
+                self.op_jump_index(IndexReg::I1, Short::is_positive, false)
+            }
+            J1NN { .. } => {
+                self.op_jump_index(IndexReg::I1, Short::is_negative, true)
+            }
+            J1NZ { .. } => {
+                self.op_jump_index(IndexReg::I1, Short::is_zero, true)
+            }
+            J1NP { .. } => {
+                self.op_jump_index(IndexReg::I1, Short::is_positive, true)
+            }
+            J2N { .. } => {
+                self.op_jump_index(IndexReg::I2, Short::is_negative, false)
+            }
+            J2Z { .. } => {
+                self.op_jump_index(IndexReg::I2, Short::is_zero, false)
+            }
+            J2P { .. } => {
+                self.op_jump_index(IndexReg::I2, Short::is_positive, false)
+            }
+            J2NN { .. } => {
+                self.op_jump_index(IndexReg::I2, Short::is_negative, true)
+            }
+            J2NZ { .. } => {
+                self.op_jump_index(IndexReg::I2, Short::is_zero, true)
+            }
+            J2NP { .. } => {
+                self.op_jump_index(IndexReg::I2, Short::is_positive, true)
+            }
+            J3N { .. } => {
+                self.op_jump_index(IndexReg::I3, Short::is_negative, false)
+            }
+            J3Z { .. } => {
+                self.op_jump_index(IndexReg::I3, Short::is_zero, false)
+            }
+            J3P { .. } => {
+                self.op_jump_index(IndexReg::I3, Short::is_positive, false)
+            }
+            J3NN { .. } => {
+                self.op_jump_index(IndexReg::I3, Short::is_negative, true)
+            }
+            J3NZ { .. } => {
+                self.op_jump_index(IndexReg::I3, Short::is_zero, true)
+            }
+            J3NP { .. } => {
+                self.op_jump_index(IndexReg::I3, Short::is_positive, true)
+            }
+            J4N { .. } => {
+                self.op_jump_index(IndexReg::I4, Short::is_negative, false)
+            }
+            J4Z { .. } => {
+                self.op_jump_index(IndexReg::I4, Short::is_zero, false)
+            }
+            J4P { .. } => {
+                self.op_jump_index(IndexReg::I4, Short::is_positive, false)
+            }
+            J4NN { .. } => {
+                self.op_jump_index(IndexReg::I4, Short::is_negative, true)
+            }
+            J4NZ { .. } => {
+                self.op_jump_index(IndexReg::I4, Short::is_zero, true)
+            }
+            J4NP { .. } => {
+                self.op_jump_index(IndexReg::I4, Short::is_positive, true)
+            }
+            J5N { .. } => {
+                self.op_jump_index(IndexReg::I5, Short::is_negative, false)
+            }
+            J5Z { .. } => {
+                self.op_jump_index(IndexReg::I5, Short::is_zero, false)
+            }
+            J5P { .. } => {
+                self.op_jump_index(IndexReg::I5, Short::is_positive, false)
+            }
+            J5NN { .. } => {
+                self.op_jump_index(IndexReg::I5, Short::is_negative, true)
+            }
+            J5NZ { .. } => {
+                self.op_jump_index(IndexReg::I5, Short::is_zero, true)
+            }
+            J5NP { .. } => {
+                self.op_jump_index(IndexReg::I5, Short::is_positive, true)
+            }
+            J6N { .. } => {
+                self.op_jump_index(IndexReg::I6, Short::is_negative, false)
+            }
+            J6Z { .. } => {
+                self.op_jump_index(IndexReg::I6, Short::is_zero, false)
+            }
+            J6P { .. } => {
+                self.op_jump_index(IndexReg::I6, Short::is_positive, false)
+            }
+            J6NN { .. } => {
+                self.op_jump_index(IndexReg::I6, Short::is_negative, true)
+            }
+            J6NZ { .. } => {
+                self.op_jump_index(IndexReg::I6, Short::is_zero, true)
+            }
+            J6NP { .. } => {
+                self.op_jump_index(IndexReg::I6, Short::is_positive, true)
+            }
+            JXN { .. } => {
+                self.op_jump_word(WordReg::X, Word::is_negative, false)
+            }
+            JXZ { .. } => self.op_jump_word(WordReg::X, Word::is_zero, false),
+            JXP { .. } => {
+                self.op_jump_word(WordReg::X, Word::is_positive, false)
+            }
+            JXNN { .. } => {
+                self.op_jump_word(WordReg::X, Word::is_negative, true)
+            }
+            JXNZ { .. } => self.op_jump_word(WordReg::X, Word::is_zero, true),
+            JXNP { .. } => {
+                self.op_jump_word(WordReg::X, Word::is_positive, true)
+            }
+            JXE { .. } => self.op_jump_word(WordReg::X, Word::is_even, false),
+            JXO { .. } => self.op_jump_word(WordReg::X, Word::is_even, true),
+            INCA { .. } => self.op_inc_dec_word(WordReg::A, false),
+            DECA { .. } => self.op_inc_dec_word(WordReg::A, true),
+            ENTA { .. } => self.op_ent_word(WordReg::A, false),
+            ENNA { .. } => self.op_ent_word(WordReg::A, true),
+            INC1 { .. } => self.op_inc_dec_index(IndexReg::I1, false)?,
+            DEC1 { .. } => self.op_inc_dec_index(IndexReg::I1, true)?,
+            ENT1 { .. } => self.op_ent_index(IndexReg::I1, false),
+            ENN1 { .. } => self.op_ent_index(IndexReg::I1, true),
+            INC2 { .. } => self.op_inc_dec_index(IndexReg::I2, false)?,
+            DEC2 { .. } => self.op_inc_dec_index(IndexReg::I2, true)?,
+            ENT2 { .. } => self.op_ent_index(IndexReg::I2, false),
+            ENN2 { .. } => self.op_ent_index(IndexReg::I2, true),
+            INC3 { .. } => self.op_inc_dec_index(IndexReg::I3, false)?,
+            DEC3 { .. } => self.op_inc_dec_index(IndexReg::I3, true)?,
+            ENT3 { .. } => self.op_ent_index(IndexReg::I3, false),
+            ENN3 { .. } => self.op_ent_index(IndexReg::I3, true),
+            INC4 { .. } => self.op_inc_dec_index(IndexReg::I4, false)?,
+            DEC4 { .. } => self.op_inc_dec_index(IndexReg::I4, true)?,
+            ENT4 { .. } => self.op_ent_index(IndexReg::I4, false),
+            ENN4 { .. } => self.op_ent_index(IndexReg::I4, true),
+            INC5 { .. } => self.op_inc_dec_index(IndexReg::I5, false)?,
+            DEC5 { .. } => self.op_inc_dec_index(IndexReg::I5, true)?,
+            ENT5 { .. } => self.op_ent_index(IndexReg::I5, false),
+            ENN5 { .. } => self.op_ent_index(IndexReg::I5, true),
+            INC6 { .. } => self.op_inc_dec_index(IndexReg::I6, false)?,
+            DEC6 { .. } => self.op_inc_dec_index(IndexReg::I6, true)?,
+            ENT6 { .. } => self.op_ent_index(IndexReg::I6, false),
+            ENN6 { .. } => self.op_ent_index(IndexReg::I6, true),
+            INCX { .. } => self.op_inc_dec_word(WordReg::A, false),
+            DECX { .. } => self.op_inc_dec_word(WordReg::A, true),
+            ENTX { .. } => self.op_ent_word(WordReg::X, false),
+            ENNX { .. } => self.op_ent_word(WordReg::X, true),
+            CMPA { .. } => self.op_cmp_word(WordReg::A)?,
+            FCMP { .. } => self.op_fcmp()?,
+            CMP1 { .. } => self.op_cmp_index(IndexReg::I1)?,
+            CMP2 { .. } => self.op_cmp_index(IndexReg::I2)?,
+            CMP3 { .. } => self.op_cmp_index(IndexReg::I3)?,
+            CMP4 { .. } => self.op_cmp_index(IndexReg::I4)?,
+            CMP5 { .. } => self.op_cmp_index(IndexReg::I5)?,
+            CMP6 { .. } => self.op_cmp_index(IndexReg::I6)?,
+            CMPX { .. } => self.op_cmp_word(WordReg::X)?,
         }
 
         Ok(())
-    }
-
-    fn track(&mut self) -> Track<'_> {
-        self.bm.track(&self.machine)
     }
 
     fn maybe_set_overflow_toggle(&mut self, do_set: bool) {
@@ -434,9 +547,34 @@ impl Emulator {
         self.machine.registers_mut().set_index_reg(reg, value);
     }
 
-    fn mem_read_word(&mut self, address: MemoryAddress) -> Word {
-        self.track().mem_read(address);
-        self.machine.memory()[address]
+    fn try_mem_read(
+        &mut self,
+        address: MemoryAddress,
+        field_spec: impl Into<Option<FieldSpec>>,
+    ) -> Result<Word> {
+        let word = self
+            .machine
+            .bus()
+            .try_mem_read(address, field_spec)
+            .map_err(|e| self.mem_access_err(e))?;
+
+        self.bm.track_mem_read(&self.machine, address);
+        Ok(word)
+    }
+
+    fn try_mem_write(
+        &mut self,
+        address: MemoryAddress,
+        value: Word,
+        field_spec: impl Into<Option<FieldSpec>>,
+    ) -> Result<()> {
+        self.machine
+            .bus_mut()
+            .try_mem_write(address, value, field_spec)
+            .map_err(|e| self.mem_access_err(e))?;
+
+        self.bm.track_mem_write(&self.machine, address);
+        Ok(())
     }
 
     fn try_indexing(&mut self) -> Result<Short> {
@@ -458,10 +596,7 @@ impl Emulator {
         }
     }
 
-    fn try_load_for_inst(&mut self) -> Result<Word> {
-        debug_assert!(self.inst.op().field_kind() == OpFieldKind::Word);
-
-        let field_spec = FieldSpec::try_from(self.inst.field()).unwrap();
+    fn try_load_for_inst(&mut self, field: FieldSpec) -> Result<Word> {
         let address = MemoryAddress::try_from(self.inst_indexed_address)
             .map_err(|_| {
                 self.make_error(ErrorKind::ReadOutOfBounds(
@@ -469,16 +604,14 @@ impl Emulator {
                 ))
             })?;
 
-        self.track().mem_read(address);
-        let value = self.machine.memory().load(address, field_spec);
-
-        Ok(value)
+        self.try_mem_read(address, field)
     }
 
-    fn try_store_for_inst(&mut self, value: Word) -> Result<()> {
-        debug_assert!(self.inst.op().field_kind() == OpFieldKind::Word);
-
-        let field_spec = FieldSpec::try_from(self.inst.field()).unwrap();
+    fn try_store_for_inst(
+        &mut self,
+        value: Word,
+        field: FieldSpec,
+    ) -> Result<()> {
         let address = MemoryAddress::try_from(self.inst_indexed_address)
             .map_err(|_| {
                 self.make_error(ErrorKind::WriteOutOfBounds(
@@ -486,13 +619,22 @@ impl Emulator {
                 ))
             })?;
 
-        self.track().mem_write(address);
-        self.machine.memory_mut().store(address, value, field_spec);
-
-        Ok(())
+        self.try_mem_write(address, value, field)
     }
 
-    fn get_shift_bytes_for_inst(&self) -> Result<u32> {
+    // fn try_store_for_inst(&mut self, value: Word) -> Result<()> {
+    //     let field_spec = FieldSpec::try_from(self.inst.field()).unwrap();
+    //     let address = MemoryAddress::try_from(self.inst_indexed_address)
+    //         .map_err(|_| {
+    //             self.make_error(ErrorKind::WriteOutOfBounds(
+    //                 self.inst_indexed_address,
+    //             ))
+    //         })?;
+
+    //     self.try_mem_write(address, value, field_spec)
+    // }
+
+    fn try_get_shift_bytes_for_inst(&self) -> Result<u32> {
         debug_assert!(self.inst.op().opcode() == OpCode::Shift);
 
         let bytes = self.inst_indexed_address.to_i16();
@@ -512,9 +654,26 @@ impl Emulator {
         Error { location: self.machine.location(), kind }
     }
 
-    fn op_add_sub(&mut self, is_sub: bool) -> Result<()> {
+    fn mem_access_err(&self, e: MemoryAccessError) -> Error {
+        let kind = match e {
+            MemoryAccessError::ReadConflict(unit) => {
+                ErrorKind::ReadMemoryDeviceConflict(unit)
+            }
+            MemoryAccessError::WriteConflict(unit) => {
+                ErrorKind::WriteMemoryDeviceConflict(unit)
+            }
+        };
+
+        self.make_error(kind)
+    }
+
+    fn no_dev_err(&self, unit: DeviceUnit) -> Error {
+        self.make_error(ErrorKind::NoDevice(unit))
+    }
+
+    fn op_add_sub(&mut self, field: FieldSpec, is_sub: bool) -> Result<()> {
         let ra = self.reg_a();
-        let v = cond_neg(self.try_load_for_inst()?, is_sub);
+        let v = cond_neg(self.try_load_for_inst(field)?, is_sub);
         let (new_ra, overflow) = num::machine::add(ra, v);
 
         self.set_reg_a(new_ra);
@@ -523,9 +682,9 @@ impl Emulator {
         Ok(())
     }
 
-    fn op_mul(&mut self) -> Result<()> {
+    fn op_mul(&mut self, field: FieldSpec) -> Result<()> {
         let ra = self.reg_a();
-        let v = self.try_load_for_inst()?;
+        let v = self.try_load_for_inst(field)?;
         let (new_ra, new_rx) = num::machine::mul(ra, v);
 
         self.set_reg_a(new_ra);
@@ -534,10 +693,10 @@ impl Emulator {
         Ok(())
     }
 
-    fn op_div(&mut self) -> Result<()> {
+    fn op_div(&mut self, field: FieldSpec) -> Result<()> {
         let ra = self.reg_a();
         let rx = self.reg_x();
-        let v = self.try_load_for_inst()?;
+        let v = self.try_load_for_inst(field)?;
         let (new_ra, new_rx, overflow) = num::machine::div(ra, rx, v);
 
         self.set_reg_a(new_ra);
@@ -584,7 +743,7 @@ impl Emulator {
 
     fn op_shift_a(&mut self, shift: fn(Word, u32) -> Word) -> Result<()> {
         let ra = self.reg_a();
-        let bytes = self.get_shift_bytes_for_inst()?;
+        let bytes = self.try_get_shift_bytes_for_inst()?;
         let new_ra = shift(ra, bytes);
 
         self.set_reg_a(new_ra);
@@ -598,7 +757,7 @@ impl Emulator {
     ) -> Result<()> {
         let ra = self.reg_a();
         let rx = self.reg_x();
-        let bytes = self.get_shift_bytes_for_inst()?;
+        let bytes = self.try_get_shift_bytes_for_inst()?;
         let (new_ra, new_rx) = shift(ra, rx, bytes);
 
         self.set_reg_a(new_ra);
@@ -611,37 +770,51 @@ impl Emulator {
         todo!();
     }
 
-    fn op_load_word(&mut self, reg: WordReg, negate: bool) -> Result<()> {
-        let value = cond_neg(self.try_load_for_inst()?, negate);
+    fn op_load_word(
+        &mut self,
+        field: FieldSpec,
+        reg: WordReg,
+        negate: bool,
+    ) -> Result<()> {
+        let value = cond_neg(self.try_load_for_inst(field)?, negate);
         self.set_word_reg(reg, value);
         Ok(())
     }
 
-    fn op_load_index(&mut self, reg: IndexReg, negate: bool) -> Result<()> {
-        let value = cond_neg(self.try_load_for_inst()?, negate);
+    fn op_load_index(
+        &mut self,
+        field: FieldSpec,
+        reg: IndexReg,
+        negate: bool,
+    ) -> Result<()> {
+        let value = cond_neg(self.try_load_for_inst(field)?, negate);
         let short_value = Short::try_from(value)
             .map_err(|_| self.make_error(ErrorKind::LoadIndexOverflow))?;
         self.set_index_reg(reg, short_value);
         Ok(())
     }
 
-    fn op_store_word(&mut self, reg: WordReg) -> Result<()> {
+    fn op_store_word(&mut self, field: FieldSpec, reg: WordReg) -> Result<()> {
         let value = self.word_reg(reg);
         self.try_store_for_inst(value)
     }
 
-    fn op_store_index(&mut self, reg: IndexReg) -> Result<()> {
+    fn op_store_index(
+        &mut self,
+        field: FieldSpec,
+        reg: IndexReg,
+    ) -> Result<()> {
         let value = self.index_reg(reg);
-        self.try_store_for_inst(value.into())
+        self.try_store_for_inst(value.into(), field)
     }
 
-    fn op_stj(&mut self) -> Result<()> {
+    fn op_stj(&mut self, field: FieldSpec) -> Result<()> {
         let value = self.reg_j();
-        self.try_store_for_inst(value.into())
+        self.try_store_for_inst(value.into(), field)
     }
 
-    fn op_stz(&mut self) -> Result<()> {
-        self.try_store_for_inst(Word::POS_ZERO)
+    fn op_stz(&mut self, field: FieldSpec) -> Result<()> {
+        self.try_store_for_inst(Word::POS_ZERO, field)
     }
 
     fn ent_value_for_inst(&self, negate: bool) -> Short {
@@ -740,9 +913,26 @@ impl Emulator {
         }
     }
 
-    // fn op_jump_ready(&mut self, on_ready: bool) {
-    //     self.op_read
-    // }
+    fn op_jump_ready(&mut self, on_ready: bool) -> Result<()> {
+        let unit = DeviceUnit::try_from(self.inst.field()).unwrap();
+        let is_ready = self
+            .machine
+            .bus()
+            .is_device_ready(unit)
+            .map_err(|_| self.no_dev_err(unit))?;
+
+        if is_ready == on_ready {
+            self.jump_for_inst();
+        }
+
+        Ok(())
+    }
+
+    // fn op_ioc(&mut self) -> Result<()> {}
+
+    // fn op_in(&mut self) -> Result<()> {}
+
+    // fn op_out(&mut self) -> Result<()> {}
 }
 
 fn cond_neg<T: Neg<Output = T>>(value: T, negate: bool) -> T {
