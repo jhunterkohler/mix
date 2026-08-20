@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crate::bin::*;
 use crate::char::Char;
-use crate::num::{LocationCounter, MemoryAddress, Word};
+use crate::mem::{MemoryAddress, MemoryRange};
+use crate::num::{LocationCounter, Word};
 use crate::source::Span;
 use crate::symbol::Symbol;
 
@@ -77,6 +78,10 @@ impl ProgramSection {
     /// [`address`]: Self::address
     pub fn data(&self) -> &[Word] {
         &self.data
+    }
+
+    pub fn range(&self) -> MemoryRange {
+        MemoryRange::try_new(self.address, self.data.len()).unwrap()
     }
 }
 

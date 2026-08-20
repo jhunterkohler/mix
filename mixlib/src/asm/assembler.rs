@@ -8,11 +8,10 @@ use std::hash::{Hash, Hasher};
 use std::mem;
 use std::path::PathBuf;
 
-use crate::asm::Op;
+use crate::asm::{Instruction, InvalidInstructionErrorKind, Op};
 use crate::ast::*;
-use crate::num::{
-    Byte, FieldSpec, LocationCounter, MemoryAddress, Sign, Word,
-};
+use crate::mem::MemoryAddress;
+use crate::num::{Byte, FieldSpec, LocationCounter, Sign, Word};
 use crate::source::Span;
 use crate::symbol::{Symbol, SymbolName};
 use crate::word;
@@ -650,10 +649,9 @@ impl<'a> Assembler<'a> {
                 + self.future_ref_inserts.len()
                 - self.future_ref_inserts.contains_key(&loc.symbol()) as usize;
 
-            match u16::try_from(offset)
-                .ok()
-                .and_then(|x| x.checked_add(self.location_counter.to_u16()))
-                .and_then(|x| LocationCounter::try_from(x).ok())
+            match offset
+                .checked_add(self.location_counter.to_usize())
+                .and_then(|sum| LocationCounter::try_from(sum).ok())
             {
                 Some(value) => self.define_symbol(loc, value.into()),
                 None => {
@@ -871,9 +869,7 @@ impl<'a> Assembler<'a> {
 
         // Location counter increment is always a valid location counter since
         // it is currently a valid memory address as checked above.
-        self.location_counter =
-            LocationCounter::from_u16(self.location_counter.to_u16() + 1)
-                .unwrap();
+        self.location_counter = self.location_counter.increment().unwrap();
 
         if self.current_section_next_address() == Some(address) {
             self.sections.last_mut().unwrap().data.push(value);
@@ -894,9 +890,10 @@ impl<'a> Assembler<'a> {
     /// it a section exists and the next address is valid.
     fn current_section_next_address(&self) -> Option<MemoryAddress> {
         if let Some(section) = self.sections.last() {
-            u16::try_from(section.data.len())
-                .ok()
-                .and_then(|v| v.checked_add(section.address.to_u16()))
+            section
+                .data
+                .len()
+                .checked_add(section.address.to_usize())
                 .and_then(|v| MemoryAddress::try_from(v).ok())
         } else {
             None
