@@ -1,8 +1,9 @@
-use std::collections::HashSet;
 use std::error;
 use std::fmt;
 use std::str::Chars;
 use std::str::FromStr;
+
+use rustc_hash::FxHashSet;
 
 use crate::asm::Op;
 use crate::ast::*;
@@ -112,13 +113,13 @@ struct ParsedLiteralConstant {
 struct Parser<'a> {
     src: &'a str,
     it: Chars<'a>,
-    symbols: HashSet<Symbol>,
+    symbols: FxHashSet<Symbol>,
 }
 
 impl<'a> Parser<'a> {
     /// Create new parser.
     fn new(src: &'a str) -> Self {
-        Parser { src, it: src.chars(), symbols: HashSet::new() }
+        Parser { src, it: src.chars(), symbols: Default::default() }
     }
 
     /// Returns true if end of input is reached.
