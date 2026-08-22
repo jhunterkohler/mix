@@ -4,13 +4,16 @@ use std::fmt;
 use std::hash::Hash;
 use std::ops::Neg;
 
-use crate::asm::{Instruction, InstructionIndex};
-use crate::asm::{InvalidInstructionError, Op};
-use crate::asm::{OpCode, Program};
+use crate::asm::{
+    Instruction, InstructionIndex, InvalidInstructionError, Op, OpCode,
+    Program,
+};
+use crate::dev::DeviceList;
 use crate::dev::DeviceUnit;
-use crate::emu::bus::MemoryAccessError;
-use crate::mem::MemoryAddress;
-use crate::num::{self, FieldSpec, LocationCounter, Short, Word};
+use crate::emu::bus::MemMoveError;
+use crate::emu::bus::{StartInputError, StartOutputError};
+use crate::mem::{MemoryAddress, MemoryRange};
+use crate::num::{self, Byte, FieldSpec, LocationCounter, Short, Word};
 
 mod breakpoints;
 mod bus;
@@ -21,50 +24,53 @@ pub use breakpoints::*;
 pub use machine::*;
 pub use register::*;
 
-#[derive(Debug)]
-pub enum ErrorKind {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum EmulatorErrorKind {
     InvalidInstruction(InvalidInstructionError),
     IndexingOverflow,
     LoadIndexOverflow,
     IncIndexOverflow,
     NegativeShift,
     LocationOutOfBounds,
-    ReadOutOfBounds(Short),
-    WriteOutOfBounds(Short),
-    DeviceReadOutOfBounds(Short),
-    DeviceWriteOutOfBounds(Short),
+    LoadMemoryOutOfBounds(Short),
+    StoreMemoryOutOfBounds(Short),
+    LoadMemoryConflict(DeviceUnit, MemoryAddress),
+    StoreMemoryConflict(DeviceUnit, MemoryAddress),
     DeviceOutputUnsupported,
+    DeviceOutputOutOfBounds(DeviceUnit, Short),
+    DeviceOutputConflict(DeviceUnit, MemoryRange),
     DeviceInputUnsupported,
-    ReadMemoryDeviceConflict(DeviceUnit),
-    WriteMemoryDeviceConflict(DeviceUnit),
+    DeviceInputOutOfBounds(DeviceUnit, Short),
+    DeviceInputConflict(DeviceUnit, MemoryRange),
+    MoveSrcOutOfBounds(Short, Byte),
+    MoveDestOutOfBounds(Short, Byte),
+    MoveSrcConflict(DeviceUnit, MemoryRange),
+    MoveDestConflict(DeviceUnit, MemoryRange),
     NoDevice(DeviceUnit),
 }
 
-#[derive(Debug)]
-pub struct Error {
-    location: Short,
-    kind: ErrorKind,
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EmulatorError {
+    kind: EmulatorErrorKind,
 }
 
-impl Error {
-    pub fn location(&self) -> Short {
-        self.location
-    }
-
-    pub fn kind(&self) -> &ErrorKind {
+impl EmulatorError {
+    pub fn kind(&self) -> &EmulatorErrorKind {
         &self.kind
     }
+
+    pub fn into_kind(self) -> EmulatorErrorKind {
+        self.kind
+    }
 }
 
-impl fmt::Display for Error {
+impl fmt::Display for EmulatorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         todo!()
     }
 }
 
-impl error::Error for Error {}
-
-pub type Result<T> = std::result::Result<T, Error>;
+impl error::Error for EmulatorError {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StopReason {
@@ -86,8 +92,15 @@ pub struct Emulator {
 }
 
 impl Emulator {
-    pub fn new() -> Self {
-        todo!();
+    pub fn new(devices: Option<DeviceList>) -> Self {
+        Self {
+            machine: Machine::new(devices),
+            clock: 0,
+            bm: Default::default(),
+            inst: Default::default(),
+            inst_location: Default::default(),
+            inst_indexed_address: Default::default(),
+        }
     }
 
     pub fn machine(&self) -> &Machine {
@@ -102,7 +115,7 @@ impl Emulator {
         self.clock
     }
 
-    pub fn load(&mut self, program: &Program) {
+    pub fn load_program(&mut self, program: &Program) {
         todo!();
     }
 
@@ -150,7 +163,7 @@ impl Emulator {
         self.bm.set_is_enabled(id, false);
     }
 
-    pub fn step(&mut self) -> Result<Option<StopReason>> {
+    pub fn step(&mut self) -> Result<Option<StopReason>, EmulatorError> {
         if let Some(reason) = self.pre_step() {
             return Ok(Some(reason));
         }
@@ -158,7 +171,7 @@ impl Emulator {
         self.do_step()
     }
 
-    pub fn run(&mut self) -> Result<StopReason> {
+    pub fn run(&mut self) -> Result<StopReason, EmulatorError> {
         if let Some(reason) = self.pre_step() {
             return Ok(reason);
         }
@@ -186,14 +199,20 @@ impl Emulator {
         if self.bm.has_active() { Some(StopReason::Breakpoint) } else { None }
     }
 
-    fn do_step(&mut self) -> Result<Option<StopReason>> {
+    fn do_step(&mut self) -> Result<Option<StopReason>, EmulatorError> {
+        self.do_step_inner().map_err(|kind| EmulatorError { kind })
+    }
+
+    fn do_step_inner(
+        &mut self,
+    ) -> Result<Option<StopReason>, EmulatorErrorKind> {
         // Load instruction to execute
         self.inst_location = MemoryAddress::try_from(self.machine.location())
-            .map_err(|_| self.make_error(ErrorKind::LocationOutOfBounds))?;
+            .map_err(|_| EmulatorErrorKind::LocationOutOfBounds)?;
 
         let inst_word = self.try_mem_read(self.inst_location, None)?;
         self.inst = Instruction::try_from(inst_word)
-            .map_err(|e| self.make_error(ErrorKind::InvalidInstruction(e)))?;
+            .map_err(|e| EmulatorErrorKind::InvalidInstruction(e))?;
 
         // Perform indexing. Must always do this to catch overflow errors.
         self.inst_indexed_address = self.try_indexing()?;
@@ -215,7 +234,7 @@ impl Emulator {
     }
 
     /// Dispatch current operation.
-    fn dispatch_op(&mut self) -> Result<()> {
+    fn dispatch_op(&mut self) -> Result<(), EmulatorErrorKind> {
         use Instruction::*;
 
         match self.inst {
@@ -241,7 +260,7 @@ impl Emulator {
             SRC { .. } => self.op_shift_ax(num::machine::src)?,
             SLB { .. } => self.op_shift_ax(num::machine::slb)?,
             SRB { .. } => self.op_shift_ax(num::machine::srb)?,
-            MOVE { .. } => self.op_move()?,
+            MOVE { field, .. } => self.op_move(field)?,
             LDA { field, .. } => {
                 self.op_load_word(field, WordReg::A, false)?
             }
@@ -299,12 +318,12 @@ impl Emulator {
             ST6 { field, .. } => self.op_store_index(field, IndexReg::I6)?,
             STX { field, .. } => self.op_store_word(field, WordReg::X)?,
             STJ { field, .. } => self.op_stj(field)?,
-            STZ { field, .. } => self.op_stz(field),
-            JBUS { .. } => self.op_jump_ready(false)?,
-            IOC { .. } => self.op_ioc()?,
-            IN { .. } => self.op_in()?,
-            OUT { .. } => self.op_out()?,
-            JRED { .. } => self.op_jump_ready(true)?,
+            STZ { field, .. } => self.op_stz(field)?,
+            JBUS { field, .. } => self.op_jump_ready(field, false)?,
+            IOC { field, .. } => self.op_ioc(field)?,
+            IN { field, .. } => self.op_in(field)?,
+            OUT { field, .. } => self.op_out(field)?,
+            JRED { field, .. } => self.op_jump_ready(field, true)?,
             JMP { .. } => self.jump_for_inst(),
             JSJ { .. } => self.op_jsj(),
             JOV { .. } => self.op_jump_overflow(true),
@@ -487,15 +506,15 @@ impl Emulator {
             DECX { .. } => self.op_inc_dec_word(WordReg::A, true),
             ENTX { .. } => self.op_ent_word(WordReg::X, false),
             ENNX { .. } => self.op_ent_word(WordReg::X, true),
-            CMPA { .. } => self.op_cmp_word(WordReg::A)?,
+            CMPA { field, .. } => self.op_cmp_word(field, WordReg::A)?,
             FCMP { .. } => self.op_fcmp()?,
-            CMP1 { .. } => self.op_cmp_index(IndexReg::I1)?,
-            CMP2 { .. } => self.op_cmp_index(IndexReg::I2)?,
-            CMP3 { .. } => self.op_cmp_index(IndexReg::I3)?,
-            CMP4 { .. } => self.op_cmp_index(IndexReg::I4)?,
-            CMP5 { .. } => self.op_cmp_index(IndexReg::I5)?,
-            CMP6 { .. } => self.op_cmp_index(IndexReg::I6)?,
-            CMPX { .. } => self.op_cmp_word(WordReg::X)?,
+            CMP1 { field, .. } => self.op_cmp_index(field, IndexReg::I1)?,
+            CMP2 { field, .. } => self.op_cmp_index(field, IndexReg::I2)?,
+            CMP3 { field, .. } => self.op_cmp_index(field, IndexReg::I3)?,
+            CMP4 { field, .. } => self.op_cmp_index(field, IndexReg::I4)?,
+            CMP5 { field, .. } => self.op_cmp_index(field, IndexReg::I5)?,
+            CMP6 { field, .. } => self.op_cmp_index(field, IndexReg::I6)?,
+            CMPX { field, .. } => self.op_cmp_word(field, WordReg::X)?,
         }
 
         Ok(())
@@ -551,14 +570,13 @@ impl Emulator {
         &mut self,
         address: MemoryAddress,
         field_spec: impl Into<Option<FieldSpec>>,
-    ) -> Result<Word> {
-        let word = self
-            .machine
-            .bus()
-            .try_mem_read(address, field_spec)
-            .map_err(|e| self.mem_access_err(e))?;
+    ) -> Result<Word, EmulatorErrorKind> {
+        let word =
+            self.machine.bus().try_mem_read(address, field_spec).map_err(
+                |e| EmulatorErrorKind::LoadMemoryConflict(e.unit, address),
+            )?;
 
-        self.bm.track_mem_read(&self.machine, address);
+        self.bm.track_mem_load(&self.machine, address);
         Ok(word)
     }
 
@@ -567,17 +585,19 @@ impl Emulator {
         address: MemoryAddress,
         value: Word,
         field_spec: impl Into<Option<FieldSpec>>,
-    ) -> Result<()> {
+    ) -> Result<(), EmulatorErrorKind> {
         self.machine
             .bus_mut()
             .try_mem_write(address, value, field_spec)
-            .map_err(|e| self.mem_access_err(e))?;
+            .map_err(|e| {
+                EmulatorErrorKind::StoreMemoryConflict(e.unit, address)
+            })?;
 
-        self.bm.track_mem_write(&self.machine, address);
+        self.bm.track_mem_store(&self.machine, address);
         Ok(())
     }
 
-    fn try_indexing(&mut self) -> Result<Short> {
+    fn try_indexing(&mut self) -> Result<Short, EmulatorErrorKind> {
         if let Some(reg) = match self.inst.index() {
             InstructionIndex::None => None,
             InstructionIndex::I1 => Some(IndexReg::I1),
@@ -590,19 +610,19 @@ impl Emulator {
             self.inst
                 .address()
                 .checked_add(self.index_reg(reg))
-                .ok_or_else(|| self.make_error(ErrorKind::IndexingOverflow))
+                .ok_or(EmulatorErrorKind::IndexingOverflow)
         } else {
             Ok(self.inst.address())
         }
     }
 
-    fn try_load_for_inst(&mut self, field: FieldSpec) -> Result<Word> {
-        let address = MemoryAddress::try_from(self.inst_indexed_address)
-            .map_err(|_| {
-                self.make_error(ErrorKind::ReadOutOfBounds(
-                    self.inst_indexed_address,
-                ))
-            })?;
+    fn try_load_for_inst(
+        &mut self,
+        field: impl Into<Option<FieldSpec>>,
+    ) -> Result<Word, EmulatorErrorKind> {
+        let address = self.inst_indexed_address;
+        let address = MemoryAddress::try_from(address)
+            .map_err(|_| EmulatorErrorKind::LoadMemoryOutOfBounds(address))?;
 
         self.try_mem_read(address, field)
     }
@@ -610,38 +630,23 @@ impl Emulator {
     fn try_store_for_inst(
         &mut self,
         value: Word,
-        field: FieldSpec,
-    ) -> Result<()> {
-        let address = MemoryAddress::try_from(self.inst_indexed_address)
-            .map_err(|_| {
-                self.make_error(ErrorKind::WriteOutOfBounds(
-                    self.inst_indexed_address,
-                ))
-            })?;
+        field: impl Into<Option<FieldSpec>>,
+    ) -> Result<(), EmulatorErrorKind> {
+        let address = self.inst_indexed_address;
+        let address = MemoryAddress::try_from(address)
+            .map_err(|_| EmulatorErrorKind::StoreMemoryOutOfBounds(address))?;
 
         self.try_mem_write(address, value, field)
     }
 
-    // fn try_store_for_inst(&mut self, value: Word) -> Result<()> {
-    //     let field_spec = FieldSpec::try_from(self.inst.field()).unwrap();
-    //     let address = MemoryAddress::try_from(self.inst_indexed_address)
-    //         .map_err(|_| {
-    //             self.make_error(ErrorKind::WriteOutOfBounds(
-    //                 self.inst_indexed_address,
-    //             ))
-    //         })?;
-
-    //     self.try_mem_write(address, value, field_spec)
-    // }
-
-    fn try_get_shift_bytes_for_inst(&self) -> Result<u32> {
-        debug_assert!(self.inst.op().opcode() == OpCode::Shift);
+    fn try_get_shift_bytes_for_inst(&self) -> Result<u32, EmulatorErrorKind> {
+        debug_assert!(self.inst.opcode() == OpCode::Shift);
 
         let bytes = self.inst_indexed_address.to_i16();
         if bytes >= 0 {
             Ok(bytes as u32)
         } else {
-            Err(self.make_error(ErrorKind::NegativeShift))
+            Err(EmulatorErrorKind::NegativeShift)
         }
     }
 
@@ -650,28 +655,11 @@ impl Emulator {
         self.machine.set_location(self.inst_indexed_address);
     }
 
-    fn make_error(&self, kind: ErrorKind) -> Error {
-        Error { location: self.machine.location(), kind }
-    }
-
-    fn mem_access_err(&self, e: MemoryAccessError) -> Error {
-        let kind = match e {
-            MemoryAccessError::ReadConflict(unit) => {
-                ErrorKind::ReadMemoryDeviceConflict(unit)
-            }
-            MemoryAccessError::WriteConflict(unit) => {
-                ErrorKind::WriteMemoryDeviceConflict(unit)
-            }
-        };
-
-        self.make_error(kind)
-    }
-
-    fn no_dev_err(&self, unit: DeviceUnit) -> Error {
-        self.make_error(ErrorKind::NoDevice(unit))
-    }
-
-    fn op_add_sub(&mut self, field: FieldSpec, is_sub: bool) -> Result<()> {
+    fn op_add_sub(
+        &mut self,
+        field: FieldSpec,
+        is_sub: bool,
+    ) -> Result<(), EmulatorErrorKind> {
         let ra = self.reg_a();
         let v = cond_neg(self.try_load_for_inst(field)?, is_sub);
         let (new_ra, overflow) = num::machine::add(ra, v);
@@ -682,7 +670,7 @@ impl Emulator {
         Ok(())
     }
 
-    fn op_mul(&mut self, field: FieldSpec) -> Result<()> {
+    fn op_mul(&mut self, field: FieldSpec) -> Result<(), EmulatorErrorKind> {
         let ra = self.reg_a();
         let v = self.try_load_for_inst(field)?;
         let (new_ra, new_rx) = num::machine::mul(ra, v);
@@ -693,7 +681,7 @@ impl Emulator {
         Ok(())
     }
 
-    fn op_div(&mut self, field: FieldSpec) -> Result<()> {
+    fn op_div(&mut self, field: FieldSpec) -> Result<(), EmulatorErrorKind> {
         let ra = self.reg_a();
         let rx = self.reg_x();
         let v = self.try_load_for_inst(field)?;
@@ -717,31 +705,74 @@ impl Emulator {
         self.set_reg_x(new_rx);
     }
 
-    fn op_fadd_fsub(&mut self, is_sub: bool) -> Result<()> {
-        todo!();
+    fn op_fadd_fsub(&mut self, is_sub: bool) -> Result<(), EmulatorErrorKind> {
+        let ra = self.reg_a();
+        let v = cond_neg(self.try_load_for_inst(None)?, is_sub);
+        let (new_ra, overflow) = num::machine::fadd(ra, v);
+
+        self.set_reg_a(new_ra);
+        self.maybe_set_overflow_toggle(overflow);
+
+        Ok(())
     }
 
-    fn op_fmul(&mut self) -> Result<()> {
-        todo!()
+    fn op_fmul(&mut self) -> Result<(), EmulatorErrorKind> {
+        let ra = self.reg_a();
+        let v = self.try_load_for_inst(None)?;
+        let (new_ra, overflow) = num::machine::fmul(ra, v);
+
+        self.set_reg_a(new_ra);
+        self.maybe_set_overflow_toggle(overflow);
+
+        Ok(())
     }
 
-    fn op_fdiv(&mut self) -> Result<()> {
-        todo!()
+    fn op_fdiv(&mut self) -> Result<(), EmulatorErrorKind> {
+        let ra = self.reg_a();
+        let v = self.try_load_for_inst(None)?;
+        let (new_ra, overflow) = num::machine::fdiv(ra, v);
+
+        self.set_reg_a(new_ra);
+        self.maybe_set_overflow_toggle(overflow);
+
+        Ok(())
     }
 
-    fn op_flot(&mut self) -> Result<()> {
-        todo!()
+    fn op_flot(&mut self) -> Result<(), EmulatorErrorKind> {
+        let ra = self.reg_a();
+        let (new_ra, overflow) = num::machine::flot(ra);
+
+        self.set_reg_a(new_ra);
+        self.maybe_set_overflow_toggle(overflow);
+
+        Ok(())
     }
 
-    fn op_fix(&mut self) -> Result<()> {
-        todo!()
+    fn op_fix(&mut self) -> Result<(), EmulatorErrorKind> {
+        let ra = self.reg_a();
+        let (new_ra, overflow) = num::machine::fix(ra);
+
+        self.set_reg_a(new_ra);
+        self.maybe_set_overflow_toggle(overflow);
+
+        Ok(())
     }
 
-    fn op_fcmp(&mut self) -> Result<()> {
-        todo!();
+    fn op_fcmp(&mut self) -> Result<(), EmulatorErrorKind> {
+        let ra = self.reg_a();
+        let v = self.try_load_for_inst(None)?;
+        let epsilon = self.try_mem_read(MemoryAddress::MIN, None)?;
+        let ind = num::machine::fcmp(ra, v, epsilon);
+
+        self.machine.set_comparison_indicator(ind);
+
+        Ok(())
     }
 
-    fn op_shift_a(&mut self, shift: fn(Word, u32) -> Word) -> Result<()> {
+    fn op_shift_a(
+        &mut self,
+        shift: fn(Word, u32) -> Word,
+    ) -> Result<(), EmulatorErrorKind> {
         let ra = self.reg_a();
         let bytes = self.try_get_shift_bytes_for_inst()?;
         let new_ra = shift(ra, bytes);
@@ -754,7 +785,7 @@ impl Emulator {
     fn op_shift_ax(
         &mut self,
         shift: fn(Word, Word, u32) -> (Word, Word),
-    ) -> Result<()> {
+    ) -> Result<(), EmulatorErrorKind> {
         let ra = self.reg_a();
         let rx = self.reg_x();
         let bytes = self.try_get_shift_bytes_for_inst()?;
@@ -766,8 +797,30 @@ impl Emulator {
         Ok(())
     }
 
-    fn op_move(&self) -> Result<()> {
-        todo!();
+    fn op_move(&mut self, field: Byte) -> Result<(), EmulatorErrorKind> {
+        let len = field.to_u8().into();
+        let read_start = self.inst_indexed_address;
+        let read_range = MemoryRange::from_short_len(read_start, len)
+            .ok_or(EmulatorErrorKind::MoveSrcOutOfBounds(read_start, field))?;
+
+        let write_start = self.machine.registers().reg_i1();
+        let write_range =
+            MemoryRange::from_short_len(write_start, len).ok_or(
+                EmulatorErrorKind::MoveDestOutOfBounds(write_start, field),
+            )?;
+
+        self.machine.bus_mut().try_mem_move(read_range, write_range).map_err(
+            |e| match e {
+                MemMoveError::ReadConflict(unit) => {
+                    EmulatorErrorKind::MoveSrcConflict(unit, read_range)
+                }
+                MemMoveError::WriteConflict(unit) => {
+                    EmulatorErrorKind::MoveDestConflict(unit, write_range)
+                }
+            },
+        )?;
+
+        Ok(())
     }
 
     fn op_load_word(
@@ -775,7 +828,7 @@ impl Emulator {
         field: FieldSpec,
         reg: WordReg,
         negate: bool,
-    ) -> Result<()> {
+    ) -> Result<(), EmulatorErrorKind> {
         let value = cond_neg(self.try_load_for_inst(field)?, negate);
         self.set_word_reg(reg, value);
         Ok(())
@@ -786,34 +839,38 @@ impl Emulator {
         field: FieldSpec,
         reg: IndexReg,
         negate: bool,
-    ) -> Result<()> {
+    ) -> Result<(), EmulatorErrorKind> {
         let value = cond_neg(self.try_load_for_inst(field)?, negate);
         let short_value = Short::try_from(value)
-            .map_err(|_| self.make_error(ErrorKind::LoadIndexOverflow))?;
+            .map_err(|_| EmulatorErrorKind::LoadIndexOverflow)?;
         self.set_index_reg(reg, short_value);
         Ok(())
     }
 
-    fn op_store_word(&mut self, field: FieldSpec, reg: WordReg) -> Result<()> {
+    fn op_store_word(
+        &mut self,
+        field: FieldSpec,
+        reg: WordReg,
+    ) -> Result<(), EmulatorErrorKind> {
         let value = self.word_reg(reg);
-        self.try_store_for_inst(value)
+        self.try_store_for_inst(value, field)
     }
 
     fn op_store_index(
         &mut self,
         field: FieldSpec,
         reg: IndexReg,
-    ) -> Result<()> {
+    ) -> Result<(), EmulatorErrorKind> {
         let value = self.index_reg(reg);
         self.try_store_for_inst(value.into(), field)
     }
 
-    fn op_stj(&mut self, field: FieldSpec) -> Result<()> {
+    fn op_stj(&mut self, field: FieldSpec) -> Result<(), EmulatorErrorKind> {
         let value = self.reg_j();
         self.try_store_for_inst(value.into(), field)
     }
 
-    fn op_stz(&mut self, field: FieldSpec) -> Result<()> {
+    fn op_stz(&mut self, field: FieldSpec) -> Result<(), EmulatorErrorKind> {
         self.try_store_for_inst(Word::POS_ZERO, field)
     }
 
@@ -843,31 +900,41 @@ impl Emulator {
         self.set_word_reg(reg, value);
     }
 
-    fn op_inc_dec_index(&mut self, reg: IndexReg, is_dec: bool) -> Result<()> {
+    fn op_inc_dec_index(
+        &mut self,
+        reg: IndexReg,
+        is_dec: bool,
+    ) -> Result<(), EmulatorErrorKind> {
         let rhs = cond_neg(self.inst_indexed_address, is_dec);
         let (value, overflow) = self.index_reg(reg).overflowing_add(rhs);
 
         if overflow {
-            return Err(self.make_error(ErrorKind::IncIndexOverflow));
+            return Err(EmulatorErrorKind::IncIndexOverflow);
         }
 
         self.set_index_reg(reg, value);
         Ok(())
     }
 
-    fn op_cmp_word(&mut self, reg: WordReg) -> Result<()> {
-        let field_spec = FieldSpec::try_from(self.inst.field()).unwrap();
-        let lhs = self.word_reg(reg).with_load(field_spec);
-        let rhs = self.try_load_for_inst()?;
+    fn op_cmp_word(
+        &mut self,
+        field: FieldSpec,
+        reg: WordReg,
+    ) -> Result<(), EmulatorErrorKind> {
+        let lhs = self.word_reg(reg).with_load(field);
+        let rhs = self.try_load_for_inst(field)?;
 
         self.machine.set_comparison_indicator(lhs.cmp(&rhs));
         Ok(())
     }
 
-    fn op_cmp_index(&mut self, reg: IndexReg) -> Result<()> {
-        let field_spec = FieldSpec::try_from(self.inst.field()).unwrap();
-        let lhs = Word::from(self.index_reg(reg)).with_load(field_spec);
-        let rhs = self.try_load_for_inst()?;
+    fn op_cmp_index(
+        &mut self,
+        field: FieldSpec,
+        reg: IndexReg,
+    ) -> Result<(), EmulatorErrorKind> {
+        let lhs = Word::from(self.index_reg(reg)).with_load(field);
+        let rhs = self.try_load_for_inst(field)?;
 
         self.machine.set_comparison_indicator(lhs.cmp(&rhs));
         Ok(())
@@ -913,13 +980,16 @@ impl Emulator {
         }
     }
 
-    fn op_jump_ready(&mut self, on_ready: bool) -> Result<()> {
-        let unit = DeviceUnit::try_from(self.inst.field()).unwrap();
+    fn op_jump_ready(
+        &mut self,
+        unit: DeviceUnit,
+        on_ready: bool,
+    ) -> Result<(), EmulatorErrorKind> {
         let is_ready = self
             .machine
             .bus()
             .is_device_ready(unit)
-            .map_err(|_| self.no_dev_err(unit))?;
+            .map_err(|_| EmulatorErrorKind::NoDevice(unit))?;
 
         if is_ready == on_ready {
             self.jump_for_inst();
@@ -928,11 +998,67 @@ impl Emulator {
         Ok(())
     }
 
-    // fn op_ioc(&mut self) -> Result<()> {}
+    fn op_ioc(&mut self, unit: DeviceUnit) -> Result<(), EmulatorErrorKind> {
+        let arg = self.inst_indexed_address;
+        let block = self.reg_x();
 
-    // fn op_in(&mut self) -> Result<()> {}
+        self.machine
+            .bus_mut()
+            .start_ioc(unit, arg, block)
+            .map_err(|_| EmulatorErrorKind::NoDevice(unit))?;
 
-    // fn op_out(&mut self) -> Result<()> {}
+        self.bm.track_io_control(&self.machine, unit);
+
+        Ok(())
+    }
+
+    fn op_in(&mut self, unit: DeviceUnit) -> Result<(), EmulatorErrorKind> {
+        let block = self.reg_x();
+        let start = self.inst_indexed_address;
+        let range =
+            MemoryRange::from_short_len(start, unit.kind().block_size())
+                .ok_or(EmulatorErrorKind::DeviceInputOutOfBounds(
+                    unit, start,
+                ))?;
+
+        self.machine.bus_mut().start_input(unit, range, block).map_err(
+            |e| match e {
+                StartInputError::NoDevice => EmulatorErrorKind::NoDevice(unit),
+                StartInputError::WriteConflict(other_unit) => {
+                    EmulatorErrorKind::DeviceInputConflict(other_unit, range)
+                }
+            },
+        )?;
+
+        self.bm.track_io_input(&self.machine, unit);
+
+        Ok(())
+    }
+
+    fn op_out(&mut self, unit: DeviceUnit) -> Result<(), EmulatorErrorKind> {
+        let block = self.reg_x();
+        let start = self.inst_indexed_address;
+        let oob = || EmulatorErrorKind::DeviceOutputOutOfBounds(unit, start);
+        let address = MemoryAddress::try_from(start).map_err(|_| oob())?;
+        let range =
+            MemoryRange::from_address_len(address, unit.kind().block_size())
+                .ok_or_else(oob)?;
+
+        self.machine.bus_mut().start_output(unit, range, block).map_err(
+            |e| match e {
+                StartOutputError::NoDevice => {
+                    EmulatorErrorKind::NoDevice(unit)
+                }
+                StartOutputError::ReadConflict(other_unit) => {
+                    EmulatorErrorKind::DeviceOutputConflict(other_unit, range)
+                }
+            },
+        )?;
+
+        self.bm.track_io_output(&self.machine, unit);
+
+        Ok(())
+    }
 }
 
 fn cond_neg<T: Neg<Output = T>>(value: T, negate: bool) -> T {
