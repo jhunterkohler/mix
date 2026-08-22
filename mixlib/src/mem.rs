@@ -1,12 +1,10 @@
 use std::error;
 use std::fmt;
 use std::io;
-use std::ops::Range;
-use std::ops::RangeInclusive;
-use std::ops::{Index, IndexMut};
+use std::ops::{Index, IndexMut, Range};
 
 use crate::bin::{Decode, Encode, EncodingError};
-use crate::num::{LocationCounter, Short, Word, impl_int_repr};
+use crate::num::{FieldSpec, LocationCounter, Short, Word, impl_int_repr};
 
 /// A MIX memory address.
 ///
@@ -95,62 +93,65 @@ impl error::Error for InvalidMemoryRangeError {}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct MemoryRange {
-    start: MemoryAddress,
-    len: u16,
+    pub start: MemoryAddress,
+    pub last: MemoryAddress,
 }
 
 impl MemoryRange {
-    pub const fn try_new(
-        start: MemoryAddress,
-        len: usize,
-    ) -> Result<MemoryRange, InvalidMemoryRangeError> {
-        if Self::is_valid(start, len) {
-            Ok(unsafe { MemoryRange::new_unchecked(start, len) })
-        } else {
-            Err(InvalidMemoryRangeError(()))
-        }
+    pub fn new(start: MemoryAddress, last: MemoryAddress) -> Self {
+        Self { start, last }
     }
 
-    pub const unsafe fn new_unchecked(
-        start: MemoryAddress,
-        len: usize,
-    ) -> MemoryRange {
-        debug_assert!(Self::is_valid(start, len));
-        MemoryRange { start, len: len as u16 }
+    pub fn from_short_len(start: Short, len: usize) -> Option<Self> {
+        Self::from_address_len(start.try_into().ok()?, len)
     }
 
-    pub const fn start(&self) -> MemoryAddress {
-        self.start
+    pub fn from_address_len(start: MemoryAddress, len: usize) -> Option<Self> {
+        Some(Self {
+            start,
+            last: start
+                .to_usize()
+                .checked_add(len.checked_sub(1)?)?
+                .try_into()
+                .ok()?,
+        })
     }
 
     pub const fn len(&self) -> usize {
-        self.len as usize
+        let start = self.start.to_usize();
+        let last = self.last.to_usize();
+
+        if last < start { 0 } else { last - start + 1 }
     }
 
     pub const fn is_empty(&self) -> bool {
-        self.len == 0
+        self.last.to_usize() < self.start.to_usize()
     }
 
-    fn usize_range(&self) -> Range<usize> {
+    pub const fn is_overlapping(&self, other: &MemoryRange) -> bool {
+        let r1 = self.to_range_usize();
+        let r2 = other.to_range_usize();
+        r1.start < r2.end && r2.start < r1.end
+    }
+
+    pub(crate) const fn to_range_usize(&self) -> Range<usize> {
         let start = self.start.to_usize();
-        let end = start + self.len as usize;
+        let end = start + self.len();
         start..end
     }
 
-    const fn is_valid(start: MemoryAddress, len: usize) -> bool {
-        match start.to_usize().checked_add(len) {
-            Some(sum) => sum <= Memory::LEN,
-            None => false,
+    fn is_valid(start: MemoryAddress, len: usize) -> bool {
+        if let Some(sum) = start.to_usize().checked_add(len) {
+            sum <= Memory::LEN
+        } else {
+            false
         }
     }
 }
 
-impl From<RangeInclusive<MemoryAddress>> for MemoryRange {
-    fn from(value: RangeInclusive<MemoryAddress>) -> Self {
-        let start = *value.start();
-        let len = value.end().to_usize().saturating_sub(start.to_usize());
-
-        unsafe { MemoryRange::new_unchecked(start, len) }
+impl From<MemoryAddress> for MemoryRange {
+    fn from(value: MemoryAddress) -> Self {
+        MemoryRange::new(value, value)
     }
 }
 
@@ -164,6 +165,49 @@ impl Memory {
 
     pub fn new() -> Self {
         Self { data: unsafe { Box::new_zeroed().assume_init() } }
+    }
+
+    pub fn as_slice(&self) -> &[Word] {
+        self.data.as_slice()
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [Word] {
+        self.data.as_mut_slice()
+    }
+
+    pub fn reset(&mut self) {
+        self.data.fill(Word::POS_ZERO);
+    }
+
+    pub fn load<F: Into<Option<FieldSpec>>>(
+        &self,
+        address: MemoryAddress,
+        field_spec: F,
+    ) -> Word {
+        match field_spec.into() {
+            Some(spec) => self[address].with_load(spec),
+            None => self[address],
+        }
+    }
+
+    pub fn store<F: Into<Option<FieldSpec>>>(
+        &mut self,
+        address: MemoryAddress,
+        value: Word,
+        field_spec: F,
+    ) {
+        let dest = &mut self[address];
+
+        match field_spec.into() {
+            Some(spec) => *dest = dest.with_store(value, spec),
+            None => *dest = value,
+        }
+    }
+}
+
+impl Default for Memory {
+    fn default() -> Self {
+        Memory::new()
     }
 }
 
@@ -185,330 +229,12 @@ impl Index<MemoryRange> for Memory {
     type Output = [Word];
 
     fn index(&self, index: MemoryRange) -> &Self::Output {
-        unsafe { self.data.get_unchecked(index.usize_range()) }
+        unsafe { self.data.get_unchecked(index.to_range_usize()) }
     }
 }
 
 impl IndexMut<MemoryRange> for Memory {
     fn index_mut(&mut self, index: MemoryRange) -> &mut Self::Output {
-        unsafe { self.data.get_unchecked_mut(index.usize_range()) }
+        unsafe { self.data.get_unchecked_mut(index.to_range_usize()) }
     }
 }
-
-impl Default for Memory {
-    fn default() -> Self {
-        Memory::new()
-    }
-}
-
-// use std::cell::UnsafeCell;
-// use std::error;
-// use std::fmt;
-// use std::ptr;
-// use std::range::Range;
-// use std::rc::Rc;
-
-// use crate::num::FieldSpec;
-// use crate::num::MemoryAddress;
-// use crate::num::Word;
-
-// #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-// pub enum MemoryErrorKind {
-//     OutOfBounds,
-//     BorrowConflict,
-// }
-
-// #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-// pub struct MemoryError {
-//     kind: MemoryErrorKind,
-// }
-
-// impl MemoryError {
-//     pub fn kind(&self) -> &MemoryErrorKind {
-//         &self.kind
-//     }
-// }
-
-// impl fmt::Display for MemoryError {
-//     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-//         match self.kind {
-//             MemoryErrorKind::OutOfBounds => {
-//                 f.write_str("memory error: out of bounds access")
-//             }
-//             MemoryErrorKind::BorrowConflict => {
-//                 f.write_str("memory error: conflicting borrows")
-//             }
-//         }
-//     }
-// }
-
-// impl error::Error for MemoryError {}
-
-// pub type MemoryResult<T> = Result<T, MemoryError>;
-
-// fn ranges_overlap<T: Ord>(r1: Range<T>, r2: Range<T>) -> bool {
-//     r1.start < r2.end && r2.start < r1.end
-// }
-
-// #[derive(Debug, Clone, PartialEq, Eq)]
-// struct BorrowInfo {
-//     range: Range<u16>,
-//     is_exclusive: bool,
-// }
-
-// #[derive(Debug)]
-// struct BorrowTracker {
-//     borrows: UnsafeCell<Vec<BorrowInfo>>,
-// }
-
-// impl BorrowTracker {
-//     fn new() -> Self {
-//         Self { borrows: Default::default() }
-//     }
-
-//     fn add(&self, range: Range<u16>, is_exclusive: bool) {
-//         let borrows = unsafe { self.borrows.get().as_mut_unchecked() };
-//         borrows.push(BorrowInfo { range, is_exclusive });
-//     }
-
-//     fn remove(&self, range: Range<u16>) {
-//         let borrows = unsafe { self.borrows.get().as_mut_unchecked() };
-//         let pos = borrows.iter().position(|info| info.range == range).unwrap();
-//         borrows.swap_remove(pos);
-//     }
-
-//     fn can_borrow(&self, range: Range<u16>) -> bool {
-//         !unsafe { self.borrows.get().as_ref_unchecked() }
-//             .iter()
-//             .any(|info| info.is_exclusive && ranges_overlap(info.range, range))
-//     }
-
-//     fn can_borrow_mut(&self, range: Range<u16>) -> bool {
-//         !unsafe { self.borrows.get().as_ref_unchecked() }
-//             .iter()
-//             .any(|info| ranges_overlap(info.range, range))
-//     }
-// }
-
-// #[derive(Debug)]
-// struct InnerMemory {
-//     data: UnsafeCell<[Word; Memory::LEN]>,
-//     borrow_tracker: BorrowTracker,
-// }
-
-// impl InnerMemory {
-//     fn new() -> Rc<Self> {
-//         let mut rc = Rc::new_uninit();
-//         let raw: *mut Self = Rc::get_mut(&mut rc).unwrap().as_mut_ptr();
-
-//         unsafe {
-//             ptr::addr_of_mut!((*raw).data).write_bytes(0, 1);
-//             ptr::addr_of_mut!((*raw).borrow_tracker)
-//                 .write(BorrowTracker::new());
-
-//             rc.assume_init()
-//         }
-//     }
-
-//     fn try_load(
-//         &self,
-//         address: MemoryAddress,
-//         field_spec: Option<FieldSpec>,
-//     ) -> MemoryResult<Word> {
-//         let index = u16::from(address);
-//         let range = Range { start: index, end: index + 1 };
-
-//         if self.borrow_tracker.can_borrow(range) {
-//             let mut value = unsafe {
-//                 self.data.get().cast::<Word>().add(index as usize).read()
-//             };
-
-//             if let Some(spec) = field_spec {
-//                 value = value.with_load(spec);
-//             }
-
-//             Ok(value)
-//         } else {
-//             Err(MemoryError { kind: MemoryErrorKind::BorrowConflict })
-//         }
-//     }
-
-//     fn try_store(
-//         &self,
-//         address: MemoryAddress,
-//         value: Word,
-//         field_spec: Option<FieldSpec>,
-//     ) -> MemoryResult<()> {
-//         let index = u16::from(address);
-//         let range = Range { start: index, end: index + 1 };
-
-//         if self.borrow_tracker.can_borrow_mut(range) {
-//             let dest =
-//                 unsafe { self.data.get().cast::<Word>().add(index as usize) };
-
-//             let new_value = if let Some(spec) = field_spec {
-//                 unsafe { dest.read() }.with_store(value, spec)
-//             } else {
-//                 value
-//             };
-
-//             unsafe { dest.write(new_value) }
-//             Ok(())
-//         } else {
-//             Err(MemoryError { kind: MemoryErrorKind::BorrowConflict })
-//         }
-//     }
-
-//     fn try_borrow(
-//         self: &Rc<Self>,
-//         start: MemoryAddress,
-//         len: usize,
-//     ) -> MemoryResult<InnerMemoryRef> {
-//         let range = self.check_memory_range(start, len)?;
-
-//         if self.borrow_tracker.can_borrow(range) {
-//             self.borrow_tracker.add(range, false);
-//             Ok(InnerMemoryRef { range, src: self.clone() })
-//         } else {
-//             Err(MemoryError { kind: MemoryErrorKind::BorrowConflict })
-//         }
-//     }
-
-//     fn try_borrow_mut(
-//         self: &Rc<Self>,
-//         start: MemoryAddress,
-//         len: usize,
-//     ) -> MemoryResult<InnerMemoryRef> {
-//         let range = self.check_memory_range(start, len)?;
-
-//         if self.borrow_tracker.can_borrow_mut(range) {
-//             self.borrow_tracker.add(range, true);
-//             Ok(InnerMemoryRef { range, src: self.clone() })
-//         } else {
-//             Err(MemoryError { kind: MemoryErrorKind::BorrowConflict })
-//         }
-//     }
-
-//     fn check_memory_range(
-//         &self,
-//         start: MemoryAddress,
-//         len: usize,
-//     ) -> MemoryResult<Range<u16>> {
-//         let start = usize::from(start);
-
-//         if let Some(end) = start.checked_add(len)
-//             && end <= Memory::LEN
-//         {
-//             Ok(Range { start: start as u16, end: end as u16 })
-//         } else {
-//             Err(MemoryError { kind: MemoryErrorKind::OutOfBounds })
-//         }
-//     }
-// }
-
-// #[derive(Debug)]
-// pub struct Memory {
-//     inner: Rc<InnerMemory>,
-// }
-
-// impl Memory {
-//     pub const LEN: usize = 4000;
-
-//     pub fn new() -> Self {
-//         Self { inner: InnerMemory::new() }
-//     }
-
-//     pub fn try_load(
-//         &self,
-//         address: MemoryAddress,
-//         field_spec: Option<FieldSpec>,
-//     ) -> MemoryResult<Word> {
-//         self.inner.try_load(address, field_spec)
-//     }
-
-//     pub fn try_store(
-//         &mut self,
-//         address: MemoryAddress,
-//         value: Word,
-//         field_spec: Option<FieldSpec>,
-//     ) -> MemoryResult<()> {
-//         self.inner.try_store(address, value, field_spec)
-//     }
-
-//     pub fn try_borrow(
-//         &self,
-//         start: MemoryAddress,
-//         len: usize,
-//     ) -> MemoryResult<MemoryRef> {
-//         self.inner.try_borrow(start, len).map(|inner| MemoryRef { inner })
-//     }
-
-//     pub fn try_borrow_mut(
-//         &mut self,
-//         start: MemoryAddress,
-//         len: usize,
-//     ) -> MemoryResult<MemoryRefMut> {
-//         self.inner
-//             .try_borrow_mut(start, len)
-//             .map(|inner| MemoryRefMut { inner })
-//     }
-// }
-
-// impl Default for Memory {
-//     fn default() -> Self {
-//         Memory::new()
-//     }
-// }
-
-// struct InnerMemoryRef {
-//     range: Range<u16>,
-//     src: Rc<InnerMemory>,
-// }
-
-// impl InnerMemoryRef {
-//     fn slice_ptr(&self) -> *mut [Word] {
-//         let start = self.range.start as usize;
-//         let len = self.range.end as usize - start;
-//         let ptr = unsafe { self.src.data.get().cast::<Word>().add(start) };
-
-//         ptr::slice_from_raw_parts_mut(ptr, len)
-//     }
-
-//     unsafe fn as_slice(&self) -> &[Word] {
-//         unsafe { self.slice_ptr().as_ref_unchecked() }
-//     }
-
-//     unsafe fn as_slice_mut(&self) -> &mut [Word] {
-//         unsafe { self.slice_ptr().as_mut_unchecked() }
-//     }
-// }
-
-// impl Drop for InnerMemoryRef {
-//     fn drop(&mut self) {
-//         self.src.borrow_tracker.remove(self.range)
-//     }
-// }
-
-// pub struct MemoryRef {
-//     inner: InnerMemoryRef,
-// }
-
-// impl MemoryRef {
-//     pub fn as_slice(&self) -> &[Word] {
-//         unsafe { self.inner.as_slice() }
-//     }
-// }
-
-// pub struct MemoryRefMut {
-//     inner: InnerMemoryRef,
-// }
-
-// impl MemoryRefMut {
-//     pub fn as_slice(&self) -> &[Word] {
-//         unsafe { self.inner.as_slice() }
-//     }
-
-//     pub fn as_mut_slice(&mut self) -> &mut [Word] {
-//         unsafe { self.inner.as_slice_mut() }
-//     }
-// }
