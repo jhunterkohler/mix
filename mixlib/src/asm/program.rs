@@ -81,7 +81,7 @@ impl ProgramSection {
     }
 
     pub fn range(&self) -> MemoryRange {
-        MemoryRange::try_new(self.address, self.data.len()).unwrap()
+        MemoryRange::from_address_len(self.address, self.data.len()).unwrap()
     }
 }
 
