@@ -5,10 +5,10 @@
 //! be returned on decoding operations contained by a [`std::io::Error`].
 
 use std::collections::HashMap;
-use std::error::Error;
+use std::error;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::hash::Hash;
+use std::hash::{BuildHasher, Hash};
 use std::io;
 use std::mem;
 use std::mem::MaybeUninit;
@@ -47,13 +47,9 @@ impl EncodingError {
     /// impls.
     pub(crate) fn replace_unexpected_eof(e: io::Error) -> io::Error {
         match e.kind() {
-            io::ErrorKind::UnexpectedEof => EncodingError::in_io_error(),
+            io::ErrorKind::UnexpectedEof => EncodingError(()).into(),
             _ => e,
         }
-    }
-
-    pub(crate) fn in_io_error() -> io::Error {
-        io::Error::other(EncodingError(()))
     }
 }
 
@@ -63,7 +59,13 @@ impl fmt::Display for EncodingError {
     }
 }
 
-impl Error for EncodingError {}
+impl error::Error for EncodingError {}
+
+impl From<EncodingError> for io::Error {
+    fn from(value: EncodingError) -> Self {
+        io::Error::new(io::ErrorKind::InvalidData, value)
+    }
+}
 
 /// Encodes each element in order. The length is fixed by `N`, so unlike
 /// slices, no length prefix is written.
@@ -164,8 +166,7 @@ impl Encode for bool {
 /// value other than `0` or `1`.
 impl Decode for bool {
     fn decode<R: io::Read>(r: R) -> io::Result<Self> {
-        bool::try_from(u8::decode(r)?)
-            .map_err(|_| EncodingError::in_io_error())
+        bool::try_from(u8::decode(r)?).map_err(|_| EncodingError(()).into())
     }
 }
 
@@ -217,14 +218,14 @@ impl<T: Decode> Decode for Vec<T> {
             }
             Ok(dest)
         } else {
-            Err(EncodingError::in_io_error())
+            Err(EncodingError(()).into())
         }
     }
 }
 
 /// Encodes as a `usize` length followed by each key/value pair, in
 /// iteration order.
-impl<K: Encode, V: Encode> Encode for HashMap<K, V> {
+impl<K: Encode, V: Encode, S> Encode for HashMap<K, V, S> {
     fn encode<W: io::Write>(&self, mut w: W) -> io::Result<()> {
         self.len().encode(&mut w)?;
         self.iter().try_for_each(|(k, v)| {
@@ -240,11 +241,17 @@ impl<K: Encode, V: Encode> Encode for HashMap<K, V> {
 ///
 /// Returns an [`EncodingError`] if the encoded length exceeds
 /// [`MAX_COLLECTION_SIZE`], or if a key appears more than once.
-impl<K: Decode + Hash + Eq, V: Decode> Decode for HashMap<K, V> {
+impl<K, V, S> Decode for HashMap<K, V, S>
+where
+    K: Decode + Hash + Eq,
+    V: Decode,
+    S: BuildHasher + Default,
+{
     fn decode<R: io::Read>(mut r: R) -> io::Result<Self> {
         let len = usize::decode(&mut r)?;
         if len <= MAX_COLLECTION_SIZE {
-            let mut dest = HashMap::with_capacity(len);
+            let mut dest =
+                HashMap::with_capacity_and_hasher(len, S::default());
 
             for _ in 0..len {
                 let k = K::decode(&mut r)?;
@@ -252,13 +259,13 @@ impl<K: Decode + Hash + Eq, V: Decode> Decode for HashMap<K, V> {
 
                 // Error on duplicate keys.
                 if dest.insert(k, v).is_some() {
-                    return Err(EncodingError::in_io_error());
+                    return Err(EncodingError(()).into());
                 }
             }
 
             Ok(dest)
         } else {
-            Err(EncodingError::in_io_error())
+            Err(EncodingError(()).into())
         }
     }
 }
@@ -286,7 +293,7 @@ impl Encode for String {
 impl Decode for String {
     fn decode<R: io::Read>(r: R) -> io::Result<Self> {
         String::from_utf8(Vec::<u8>::decode(r)?)
-            .map_err(|_| EncodingError::in_io_error())
+            .map_err(|_| EncodingError(()).into())
     }
 }
 
