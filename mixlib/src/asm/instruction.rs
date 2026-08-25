@@ -96,7 +96,7 @@ impl From<InstructionIndex> for Byte {
 pub struct ConstField(Byte);
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 struct InstructionData {
     op: Op,
     address: Short,
@@ -151,6 +151,12 @@ impl Eq for Instruction {}
 impl Hash for Instruction {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.to_data().hash(state)
+    }
+}
+
+impl Default for Instruction {
+    fn default() -> Self {
+        InstructionData::default().to_inst()
     }
 }
 
