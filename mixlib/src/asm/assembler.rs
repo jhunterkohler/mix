@@ -1,12 +1,12 @@
-use siphasher::sip::SipHasher13;
-
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::error::Error;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::mem;
 use std::path::PathBuf;
+
+use rustc_hash::FxHashMap;
+use siphasher::sip::SipHasher13;
 
 use crate::asm::{Instruction, InvalidInstructionErrorKind, Op};
 use crate::ast::*;
@@ -233,7 +233,7 @@ struct Assembler<'a> {
     /// The source file path if given.
     source_path: Option<PathBuf>,
     /// A map between memory addresses and source lines
-    source_map: HashMap<MemoryAddress, Span>,
+    source_map: FxHashMap<MemoryAddress, Span>,
     /// Assembled sections.
     sections: Vec<ProgramSection>,
     /// If this is `None`, then `END` has not yet been seen.
@@ -241,9 +241,9 @@ struct Assembler<'a> {
     /// Inactive defined symbols.
     inactive_symbols: Vec<SymbolDebugInfo>,
     /// Active defined symbols.
-    active_symbols: HashMap<Symbol, ActiveSymbolInfo>,
+    active_symbols: FxHashMap<Symbol, ActiveSymbolInfo>,
     /// Future reference inserts.
-    future_ref_inserts: HashMap<Symbol, Vec<FutureRefInsert>>,
+    future_ref_inserts: FxHashMap<Symbol, Vec<FutureRefInsert>>,
     /// Literal constant inserts.
     literal_constant_inserts: Vec<LiteralConstantInsert>,
     /// Literal constant debug info, populated on `END`.
