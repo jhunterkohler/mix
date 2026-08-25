@@ -1,6 +1,7 @@
-use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
+
+use rustc_hash::FxHashMap;
 
 use crate::bin::*;
 use crate::char::Char;
@@ -104,7 +105,7 @@ impl Decode for ProgramSection {
 /// Debug info of a program.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProgramDebugInfo {
-    pub(super) source_map: HashMap<MemoryAddress, Span>,
+    pub(super) source_map: FxHashMap<MemoryAddress, Span>,
     pub(super) source_path: Option<PathBuf>,
     pub(super) source_hash: u64,
     pub(super) symbols: Vec<SymbolDebugInfo>,
@@ -116,7 +117,7 @@ pub struct ProgramDebugInfo {
 
 impl ProgramDebugInfo {
     /// A map from memory addresses to the source lines.
-    pub fn source_map(&self) -> &HashMap<MemoryAddress, Span> {
+    pub fn source_map(&self) -> &FxHashMap<MemoryAddress, Span> {
         &self.source_map
     }
 
