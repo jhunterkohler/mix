@@ -20,3 +20,6 @@ pathdiff = "0.2.3"
 mixlib = { version = ">=0.6,<1", path = "../mixlib" }
 
 [dev-dependencies]
+
+[lints]
+workspace = true

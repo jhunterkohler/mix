@@ -8,3 +8,10 @@ members = [
     "mixls",
     "mixlib-macros",
 ]
+
+[workspace.lints.clippy]
+pedantic = "warn" # Or use "deny" to treat them as errors
+use_self = "warn"
+undocumented_unsafe_blocks = "warn"
+missing_transmute_annotations = "allow"
+manual_range_contains = "allow"
