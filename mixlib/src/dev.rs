@@ -27,7 +27,6 @@ use std::error;
 use std::fmt;
 use std::io;
 use std::mem;
-use std::mem::transmute;
 
 use crate::bin::Decode;
 use crate::bin::Encode;
@@ -178,8 +177,8 @@ impl DeviceUnit {
     pub const unsafe fn from_usize_unchecked(value: usize) -> DeviceUnit {
         debug_assert!(value <= DeviceUnit::MAX as usize);
 
-        // SAFETY: `value` being valid is precondition.
-        unsafe { transmute(value as u8) }
+        // SAFETY: `value` being valid is a precondition.
+        unsafe { mem::transmute(value as u8) }
     }
 
     pub const fn to_byte(self) -> Byte {
@@ -331,17 +330,18 @@ impl<R: io::Read> WordRead for R {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvalidOutputCharError {
-    pub word_pos: usize,
-    pub byte_pos: usize,
-    pub word: Word,
+    pub pos: usize,
     pub byte: Byte,
 }
 
 impl fmt::Display for InvalidOutputCharError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!()
+        f.write_fmt(format_args!(
+            "invalid output character '{}' at position '{}'",
+            self.byte, self.pos
+        ))
     }
 }
 
@@ -366,7 +366,10 @@ impl<W: io::Write> CharWrite for W {
 
             for (byte_pos, byte) in bytes.iter().copied().enumerate() {
                 let c = Char::try_from(byte).map_err(|_| {
-                    InvalidOutputCharError { word_pos, byte_pos, word, byte }
+                    InvalidOutputCharError {
+                        pos: word_pos * Word::BYTES as usize + byte_pos,
+                        byte,
+                    }
                 })?;
 
                 utf8_offset += c.encode_utf8(&mut utf8[utf8_offset..]).len();
@@ -388,7 +391,7 @@ pub trait CharRead {
     ) -> io::Result<()>;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvalidInputCharError {
     pub pos: usize,
     pub ch: char,
@@ -396,7 +399,10 @@ pub struct InvalidInputCharError {
 
 impl fmt::Display for InvalidInputCharError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!()
+        f.write_fmt(format_args!(
+            "invalid input character '{:?}' at position {}",
+            self.ch, self.pos
+        ))
     }
 }
 
