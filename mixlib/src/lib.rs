@@ -2,11 +2,6 @@
 //!
 //! This crate provides utilities for working with Donald Knuth's MIX
 //! computer architecture and MIXAL (the MIX assembly language).
-#![allow(
-    clippy::missing_transmute_annotations,
-    clippy::len_without_is_empty,
-    clippy::manual_range_contains
-)]
 #![doc(test(attr(deny(unused_imports, dead_code))))]
 
 pub mod asm;
