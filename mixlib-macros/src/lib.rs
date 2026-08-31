@@ -6,14 +6,17 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse_macro_input;
 
-mod lit;
+mod parse;
+mod path;
 
-use lit::{ByteLit, ShortLit, WithPath, WordLit};
+use parse::{ByteLit, ShortLit, WordLit};
+
+use crate::parse::FieldLit;
 
 #[doc(hidden)]
 #[proc_macro]
 pub fn __byte(input: TokenStream) -> TokenStream {
-    let lit = parse_macro_input!(input as WithPath<ByteLit>);
+    let lit = parse_macro_input!(input as ByteLit);
 
     quote! { #lit }.into()
 }
@@ -21,7 +24,7 @@ pub fn __byte(input: TokenStream) -> TokenStream {
 #[doc(hidden)]
 #[proc_macro]
 pub fn __short(input: TokenStream) -> TokenStream {
-    let lit = parse_macro_input!(input as WithPath<ShortLit>);
+    let lit = parse_macro_input!(input as ShortLit);
 
     quote! { #lit }.into()
 }
@@ -29,7 +32,15 @@ pub fn __short(input: TokenStream) -> TokenStream {
 #[doc(hidden)]
 #[proc_macro]
 pub fn __word(input: TokenStream) -> TokenStream {
-    let lit = parse_macro_input!(input as WithPath<WordLit>);
+    let lit = parse_macro_input!(input as WordLit);
+
+    quote! { #lit }.into()
+}
+
+#[doc(hidden)]
+#[proc_macro]
+pub fn __field(input: TokenStream) -> TokenStream {
+    let lit = parse_macro_input!(input as FieldLit);
 
     quote! { #lit }.into()
 }
