@@ -58,6 +58,7 @@ impl Mul for Sign {
     /// assert_eq!(Sign::Minus * Sign::Minus, Sign::Plus);
     /// ```
     fn mul(self, rhs: Self) -> Self::Output {
+        // SAFETY: xor of bits is still a bit.
         unsafe { mem::transmute(self as u8 ^ rhs as u8) }
     }
 }
@@ -76,6 +77,7 @@ impl Neg for Sign {
     /// assert_eq!(-Sign::Minus, Sign::Plus);
     /// ```
     fn neg(self) -> Self::Output {
+        // SAFETY: `1 - bit` is still a bit.
         unsafe { mem::transmute(1 - self as u8) }
     }
 }
@@ -98,11 +100,14 @@ pub struct Byte(u8);
 
 impl Byte {
     /// The largest value that can be represented by [`Byte`]. Equal to `0`.
-    pub const MIN: Byte = Byte(0);
+    pub const MIN: Self = Self(0);
 
     /// The smallest value that can be represented by [`Byte`]. Equal to
     /// (2<sup>6</sup> &minus; 1)
-    pub const MAX: Byte = Byte(Byte::VALUE_MASK);
+    pub const MAX: Self = Self(Self::VALUE_MASK);
+
+    /// The size of this integer type in bits.
+    pub const BITS: u32 = 6;
 
     /// Converts a [`Byte`] to a `u8`.
     pub const fn to_u8(self) -> u8 {
@@ -110,8 +115,8 @@ impl Byte {
     }
 
     /// Converts a `u8` to a [`Byte`].
-    pub const fn from_u8(value: u8) -> Option<Byte> {
-        if value <= Byte::VALUE_MASK { Some(Byte(value)) } else { None }
+    pub const fn from_u8(value: u8) -> Option<Self> {
+        if value <= Self::VALUE_MASK { Some(Self(value)) } else { None }
     }
 
     /// Converts an `u8` to a [`Byte`], ignoring validity.
@@ -119,9 +124,9 @@ impl Byte {
     /// # Safety
     ///
     /// This results in undefined behavior if `value > Byte::MAX.to_u8()`.
-    pub const unsafe fn from_u8_unchecked(value: u8) -> Byte {
-        debug_assert!(value <= Byte::VALUE_MASK);
-        Byte(value)
+    pub const unsafe fn from_u8_unchecked(value: u8) -> Self {
+        debug_assert!(value <= Self::VALUE_MASK);
+        Self(value)
     }
 
     /// Checked addition. Computes `self + rhs`, returning `None` if overflow
@@ -135,7 +140,7 @@ impl Byte {
     /// assert_eq!(byte!(1).checked_add(byte!(2)), Some(byte!(3)));
     /// assert_eq!(Byte::MAX.checked_add(byte!(1)), None);
     /// ```
-    pub const fn checked_add(self, rhs: Byte) -> Option<Byte> {
+    pub const fn checked_add(self, rhs: Self) -> Option<Self> {
         let (res, overflow) = self.overflowing_add(rhs);
         if overflow { None } else { Some(res) }
     }
@@ -149,7 +154,7 @@ impl Byte {
     /// assert_eq!(byte!(3).checked_sub(byte!(2)), Some(byte!(1)));
     /// assert_eq!(Byte::MIN.checked_sub(byte!(1)), None);
     /// ```
-    pub const fn checked_sub(self, rhs: Byte) -> Option<Byte> {
+    pub const fn checked_sub(self, rhs: Self) -> Option<Self> {
         let (res, overflow) = self.overflowing_sub(rhs);
         if overflow { None } else { Some(res) }
     }
@@ -163,7 +168,7 @@ impl Byte {
     /// assert_eq!(byte!(2).checked_mul(byte!(3)), Some(byte!(6)));
     /// assert_eq!(Byte::MAX.checked_mul(byte!(2)), None);
     /// ```
-    pub const fn checked_mul(self, rhs: Byte) -> Option<Byte> {
+    pub const fn checked_mul(self, rhs: Self) -> Option<Self> {
         let (res, overflow) = self.overflowing_mul(rhs);
         if overflow { None } else { Some(res) }
     }
@@ -177,9 +182,12 @@ impl Byte {
     /// assert_eq!(byte!(1).overflowing_add(byte!(2)), (byte!(3), false));
     /// assert_eq!(Byte::MAX.overflowing_add(byte!(2)), (byte!(1), true));
     /// ```
-    pub const fn overflowing_add(self, rhs: Byte) -> (Byte, bool) {
+    pub const fn overflowing_add(self, rhs: Self) -> (Self, bool) {
         let value = self.0 + rhs.0;
-        (Byte(value & Byte::VALUE_MASK), value > Byte::VALUE_MASK)
+        let bits = value & Self::VALUE_MASK;
+        let overflow = value > Self::VALUE_MASK;
+
+        (Self(bits), overflow)
     }
 
     /// Overflowing subtraction. Computes `self + rhs`, returning the value
@@ -191,8 +199,11 @@ impl Byte {
     /// assert_eq!(byte!(3).overflowing_sub(byte!(2)), (byte!(1), false));
     /// assert_eq!(Byte::MIN.overflowing_sub(byte!(1)), (Byte::MAX, true));
     /// ```
-    pub const fn overflowing_sub(self, rhs: Byte) -> (Byte, bool) {
-        (Byte(Byte::VALUE_MASK & (self.0.wrapping_sub(rhs.0))), self.0 < rhs.0)
+    pub const fn overflowing_sub(self, rhs: Self) -> (Self, bool) {
+        let bits = self.0.wrapping_sub(rhs.0) & Self::VALUE_MASK;
+        let overflow = self.0 < rhs.0;
+
+        (Self(bits), overflow)
     }
 
     /// Overflowing multiplication. Computes `self * rhs`, returning the value
@@ -204,14 +215,15 @@ impl Byte {
     /// assert_eq!(byte!(2).overflowing_mul(byte!(3)), (byte!(6), false));
     /// assert_eq!(byte!(10).overflowing_mul(byte!(10)), (byte!(36), true));
     /// ```
-    pub const fn overflowing_mul(self, rhs: Byte) -> (Byte, bool) {
+    pub const fn overflowing_mul(self, rhs: Self) -> (Self, bool) {
         let value = self.0 as u16 * rhs.0 as u16;
-        let masked = (value & Byte::VALUE_MASK as u16) as u8;
+        let bits = value as u8 & Byte::VALUE_MASK;
+        let overflow = value > Byte::VALUE_MASK as u16;
 
-        (Byte(masked), value > Byte::VALUE_MASK as u16)
+        (Byte(bits), overflow)
     }
 
-    const VALUE_MASK: u8 = (1 << 6) - 1;
+    const VALUE_MASK: u8 = (1 << Self::BITS) - 1;
 }
 
 impl_int_repr! {
@@ -225,25 +237,6 @@ impl_int_repr! {
     try_from = [u8, u16, u32, u64, u128, usize, i8, i16, i32, i128, isize,
         Short, Word, MemoryAddress, LocationCounter],
     try_into = [],
-}
-
-impl TryFrom<Word> for Short {
-    type Error = TryFromIntError;
-
-    fn try_from(value: Word) -> Result<Self, Self::Error> {
-        const BAD_BITS: u32 = Word::VALUE_MASK & !(Short::VALUE_MASK as u32);
-
-        if value.0 & BAD_BITS != 0 {
-            return Err(TryFromIntError(()));
-        }
-
-        let sign_bit = (value.mask_sign() >> 18) as u16;
-
-        // Sign bit is cut off by the cast.
-        let value_bits = value.0 as u16;
-
-        Ok(Short(sign_bit | value_bits))
-    }
 }
 
 impl fmt::Display for Byte {
@@ -260,8 +253,7 @@ impl Encode for Byte {
 
 impl Decode for Byte {
     fn decode<R: io::Read>(r: R) -> io::Result<Self> {
-        Byte::from_u8(u8::decode(r)?)
-            .ok_or_else(|| EncodingError::in_io_error())
+        Byte::from_u8(u8::decode(r)?).ok_or_else(|| EncodingError(()).into())
     }
 }
 
@@ -276,17 +268,23 @@ pub struct Short(u16);
 impl Short {
     /// The smallest value that can be represented by [`Short`]. Equal to
     /// &minus;(2<sup>12</sup> &minus; 1).
-    pub const MIN: Short = Short(Short::SIGN_MASK | Short::VALUE_MASK);
+    pub const MIN: Self = Self(Self::SIGN_MASK | Self::VALUE_MASK);
 
     /// The largest value that can be represented by [`Short`]. Equal to
     /// (2<sup>12</sup> &minus; 1).
-    pub const MAX: Short = Short(Short::VALUE_MASK);
+    pub const MAX: Self = Self(Self::VALUE_MASK);
+
+    /// Size of this integer type in bits.
+    pub const BITS: u32 = Self::BYTES * Byte::BITS;
+
+    /// Size of this integer type in [`Byte`]s.
+    pub const BYTES: u32 = 2;
 
     /// The positive zero value &plus;0.
-    pub const POS_ZERO: Short = Short(0);
+    pub const POS_ZERO: Self = Self(0);
 
     /// The negative zero value &minus;0.
-    pub const NEG_ZERO: Short = Short(Short::SIGN_MASK);
+    pub const NEG_ZERO: Self = Self(Self::SIGN_MASK);
 
     /// Converts a [`Short`] to `i16`.
     ///
@@ -319,7 +317,7 @@ impl Short {
     /// assert_eq!(Short::from_i16(0), Some(Short::POS_ZERO));
     /// assert_eq!(Short::from_i16(0).unwrap().sign(), Sign::Plus);
     /// ```
-    pub const fn from_i16(value: i16) -> Option<Short> {
+    pub const fn from_i16(value: i16) -> Option<Self> {
         if value >= 0 {
             Self::from_sign_u16(Sign::Plus, value as u16)
         } else {
@@ -343,8 +341,8 @@ impl Short {
     /// assert_eq!(unsafe { Short::from_i16_unchecked(0) }, Short::POS_ZERO);
     /// assert_eq!(unsafe { Short::from_i16_unchecked(0) }.sign(), Sign::Plus);
     /// ```
-    pub const unsafe fn from_i16_unchecked(value: i16) -> Short {
-        debug_assert!(value.unsigned_abs() <= Short::VALUE_MASK);
+    pub const unsafe fn from_i16_unchecked(value: i16) -> Self {
+        debug_assert!(value.unsigned_abs() <= Self::VALUE_MASK);
         unsafe {
             if value >= 0 {
                 Self::from_sign_u16_unchecked(Sign::Plus, value as u16)
@@ -377,10 +375,10 @@ impl Short {
     /// assert_eq!(Short::from_sign_u16(Sign::Minus, 12), Some(short!(-12)));
     /// assert_eq!(Short::from_sign_u16(Sign::Plus, 5000), None);
     /// ```
-    pub const fn from_sign_u16(sign: Sign, magnitude: u16) -> Option<Short> {
-        if magnitude <= Short::VALUE_MASK {
+    pub const fn from_sign_u16(sign: Sign, magnitude: u16) -> Option<Self> {
+        if magnitude <= Self::VALUE_MASK {
             // SAFETY: Ensured that magnitude is valid.
-            Some(unsafe { Short::from_sign_u16_unchecked(sign, magnitude) })
+            Some(unsafe { Self::from_sign_u16_unchecked(sign, magnitude) })
         } else {
             None
         }
@@ -406,9 +404,9 @@ impl Short {
     pub const unsafe fn from_sign_u16_unchecked(
         sign: Sign,
         magnitude: u16,
-    ) -> Short {
-        debug_assert!(magnitude <= Short::VALUE_MASK);
-        Short(((sign as u16) << 12) | magnitude)
+    ) -> Self {
+        debug_assert!(magnitude <= Self::VALUE_MASK);
+        Self((sign as u16) << Self::BITS | magnitude)
     }
 
     /// Converts a sign/bytes representation to a [`Short`].
@@ -423,11 +421,12 @@ impl Short {
     ///     short![-, 1, 2]
     /// );
     /// ```
-    pub const fn from_sign_bytes(sign: Sign, bytes: [Byte; 2]) -> Short {
-        let sign_bit = (sign as u16) << 12;
-        let value_bits = (bytes[0].0 as u16) << 6 | bytes[1].0 as u16;
+    pub const fn from_sign_bytes(sign: Sign, bytes: [Byte; 2]) -> Self {
+        let sign_bit = (sign as u16) << Self::BITS;
+        let value_bits = (bytes[0].0 as u16) << 1 * Byte::BITS
+            | (bytes[1].0 as u16) << 0 * Byte::BITS;
 
-        Short(sign_bit | value_bits)
+        Self(sign_bit | value_bits)
     }
 
     /// Converts a [`Short`] to its sign/bytes representation.
@@ -461,7 +460,11 @@ impl Short {
     /// assert_eq!(Short::NEG_ZERO.sign(), Sign::Minus);
     /// ```
     pub const fn sign(self) -> Sign {
-        unsafe { mem::transmute(((self.mask_sign()) >> 12) as u8) }
+        let bit = (self.mask_sign() >> Self::BITS) as u8;
+
+        // SAFETY: `bit`, the shifted sign of `self`, is now either `0` or `1`
+        // and thus a valid `Sign`.
+        unsafe { mem::transmute(bit) }
     }
 
     /// Returns the magnitude of `self`.
@@ -493,8 +496,8 @@ impl Short {
     /// ```
     pub const fn bytes(self) -> [Byte; 2] {
         [
-            Byte((self.0 >> 6) as u8 & Byte::VALUE_MASK),
-            Byte(self.0 as u8 & Byte::VALUE_MASK),
+            Byte((self.0 >> 1 * Byte::BITS) as u8 & Byte::VALUE_MASK),
+            Byte((self.0 >> 0 * Byte::BITS) as u8 & Byte::VALUE_MASK),
         ]
     }
 
@@ -570,6 +573,21 @@ impl Short {
         self.mask_sign() != 0 && self.mask_value() != 0
     }
 
+    /// Returns `true` is `self` is even and `false` otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mixlib::{short, num::Short};
+    ///
+    /// // Even
+    /// assert!(short!(10).is_even());
+    /// assert!(Short::POS_ZERO.is_even());
+    /// assert!(Short::NEG_ZERO.is_even());
+    ///
+    /// // Odd
+    /// assert!(!short!(9).is_even());
+    /// ```
     pub const fn is_even(self) -> bool {
         self.0 & 1 == 0
     }
@@ -586,8 +604,8 @@ impl Short {
     /// assert_eq!(short!(1).abs(), short!(1));
     /// assert_eq!(short!(-1).abs(), short!(1));
     /// ```
-    pub const fn abs(self) -> Short {
-        Short(self.mask_value())
+    pub const fn abs(self) -> Self {
+        Self(self.mask_value())
     }
 
     /// Checked addition. Computes `self + rhs`, returning `None` if overflow
@@ -603,7 +621,7 @@ impl Short {
     /// assert_eq!(short!(1).checked_add(short!(2)), Some(short!(3)));
     /// assert_eq!(Short::MAX.checked_add(short!(1)), None);
     /// ```
-    pub const fn checked_add(self, rhs: Short) -> Option<Short> {
+    pub const fn checked_add(self, rhs: Self) -> Option<Self> {
         let (res, overflow) = self.overflowing_add(rhs);
         if overflow { None } else { Some(res) }
     }
@@ -621,7 +639,7 @@ impl Short {
     /// assert_eq!(short!(3).checked_sub(short!(2)), Some(short!(1)));
     /// assert_eq!(Short::MIN.checked_sub(short!(1)), None);
     /// ```
-    pub const fn checked_sub(self, rhs: Short) -> Option<Short> {
+    pub const fn checked_sub(self, rhs: Self) -> Option<Self> {
         let (res, overflow) = self.overflowing_sub(rhs);
         if overflow { None } else { Some(res) }
     }
@@ -639,7 +657,7 @@ impl Short {
     /// assert_eq!(short!(10).checked_mul(short!(100)), Some(short!(1000)));
     /// assert_eq!(Short::MAX.checked_mul(short!(2)), None);
     /// ```
-    pub const fn checked_mul(self, rhs: Short) -> Option<Short> {
+    pub const fn checked_mul(self, rhs: Self) -> Option<Self> {
         let (res, overflow) = self.overflowing_mul(rhs);
         if overflow { None } else { Some(res) }
     }
@@ -648,7 +666,7 @@ impl Short {
     /// carry.
     ///
     /// If the result is zero, the sign of `self` is retained.
-    pub const fn overflowing_add(self, rhs: Short) -> (Short, bool) {
+    pub const fn overflowing_add(self, rhs: Self) -> (Self, bool) {
         let lhs_value = self.mask_value();
         let lhs_sign = self.mask_sign();
         let rhs_value = rhs.mask_value();
@@ -656,15 +674,15 @@ impl Short {
 
         if lhs_sign == rhs_sign {
             let added = lhs_value + rhs_value;
-            let res_value = added & Short::VALUE_MASK;
-            let overflow = added > Short::VALUE_MASK;
+            let res_value = added & Self::VALUE_MASK;
+            let overflow = added > Self::VALUE_MASK;
 
-            (Short(lhs_sign | res_value), overflow)
+            (Self(lhs_sign | res_value), overflow)
         } else if lhs_value >= rhs_value {
             // Propogates sign of `self` on zero.
-            (Short(lhs_sign | (lhs_value - rhs_value)), false)
+            (Self(lhs_sign | (lhs_value - rhs_value)), false)
         } else {
-            (Short(rhs_sign | (rhs_value - lhs_value)), false)
+            (Self(rhs_sign | (rhs_value - lhs_value)), false)
         }
     }
 
@@ -672,7 +690,7 @@ impl Short {
     /// and carry.
     ///
     /// If the result is zero, the sign of `self` is retained.
-    pub const fn overflowing_sub(self, rhs: Short) -> (Short, bool) {
+    pub const fn overflowing_sub(self, rhs: Self) -> (Self, bool) {
         self.overflowing_add(rhs.const_neg())
     }
 
@@ -680,7 +698,7 @@ impl Short {
     /// and wether an overflow occurred.
     ///
     /// The sign of the result is `self.sign() * rhs.sign()`.
-    pub const fn overflowing_mul(self, rhs: Short) -> (Short, bool) {
+    pub const fn overflowing_mul(self, rhs: Self) -> (Self, bool) {
         let res_sign = self.mask_sign() ^ rhs.mask_sign();
 
         // Must promote to u32 to fit 24 bits.
@@ -688,19 +706,17 @@ impl Short {
         let res_value = mulled as u16 & Self::VALUE_MASK;
         let overflow = mulled > Self::VALUE_MASK as u32;
 
-        (Short(res_sign | res_value), overflow)
+        (Self(res_sign | res_value), overflow)
     }
 
-    pub const fn with_sign(self, sign: Sign) -> Short {
-        let sign_bit = (sign as u16) << 12;
-        let value_bits = self.mask_value();
-
-        Short(sign_bit | value_bits)
+    /// Replace the current sign with `sign`, retaining magnitude.
+    pub const fn with_sign(self, sign: Sign) -> Self {
+        // SAFETY: `self.mask_value()` always produces valid magnitude.
+        unsafe { Self::from_sign_u16_unchecked(sign, self.mask_value()) }
     }
 
-    const SIGN_MASK: u16 = 1 << 12;
-    const VALUE_MASK: u16 = (1 << 12) - 1;
-    const MASK: u16 = Self::SIGN_MASK | Self::VALUE_MASK;
+    const SIGN_MASK: u16 = 1 << Self::BITS;
+    const VALUE_MASK: u16 = Self::SIGN_MASK - 1;
 
     const fn mask_sign(self) -> u16 {
         self.0 & Short::SIGN_MASK
@@ -727,12 +743,23 @@ impl_int_repr! {
     try_into = [u8, u16, u32, u64, u128, usize, i8, isize],
 }
 
-impl From<Short> for Word {
-    fn from(value: Short) -> Self {
-        let sign_bit = (value.mask_sign() as u32) << 18;
-        let value_bits = value.mask_value() as u32;
+impl TryFrom<Word> for Short {
+    type Error = TryFromIntError;
 
-        Word(sign_bit | value_bits)
+    fn try_from(value: Word) -> Result<Self, Self::Error> {
+        const BAD_BITS: u32 = Word::VALUE_MASK & !(Short::VALUE_MASK as u32);
+        const BIT_DIFF: u32 = Word::BITS - Short::BITS;
+
+        if value.0 & BAD_BITS != 0 {
+            return Err(TryFromIntError(()));
+        }
+
+        let sign_bit = (value.mask_sign() >> BIT_DIFF) as u16;
+
+        // Sign bit is cut off by the cast.
+        let value_bits = value.0 as u16;
+
+        Ok(Short(sign_bit | value_bits))
     }
 }
 
@@ -788,11 +815,13 @@ impl Encode for Short {
 
 impl Decode for Short {
     fn decode<R: io::Read>(r: R) -> io::Result<Self> {
+        const BAD_BITS: u16 = !(Short::SIGN_MASK | Short::VALUE_MASK);
+
         let repr = u16::decode(r)?;
-        if repr & !Short::MASK == 0 {
+        if repr & BAD_BITS == 0 {
             Ok(Short(repr))
         } else {
-            Err(EncodingError::in_io_error())
+            Err(EncodingError(()).into())
         }
     }
 }
@@ -804,17 +833,23 @@ pub struct Word(u32);
 impl Word {
     /// The largest value that can be represented by [`Word`]. Equal to
     /// (2<sup>30</sup> &minus; 1).
-    pub const MAX: Word = Word(Word::VALUE_MASK);
+    pub const MAX: Self = Self(Self::VALUE_MASK);
 
     /// The smallest value that can be represented by [`Word`]. Equal to
     /// &minus;(2<sup>30</sup> &minus; 1).
-    pub const MIN: Word = Word(Word::VALUE_MASK | Word::SIGN_MASK);
+    pub const MIN: Self = Self(Self::VALUE_MASK | Word::SIGN_MASK);
+
+    /// Size of this integer type in bits.
+    pub const BITS: u32 = Self::BYTES * Byte::BITS;
+
+    /// Size of this integer type in [`Byte`]s.
+    pub const BYTES: u32 = 5;
 
     /// The positive zero value &plus;0.
-    pub const POS_ZERO: Word = Word(0);
+    pub const POS_ZERO: Self = Self(0);
 
     /// The negative zero value &minus;0.
-    pub const NEG_ZERO: Word = Word(Word::SIGN_MASK);
+    pub const NEG_ZERO: Self = Self(Self::SIGN_MASK);
 
     /// Converts a [`Word`] to `i32`.
     ///
@@ -847,11 +882,11 @@ impl Word {
     /// assert_eq!(Word::from_i32(0).unwrap().sign(), Sign::Plus);
     /// assert_eq!(Word::from_i32(Word::MAX.to_i32() + 1), None);
     /// ```
-    pub const fn from_i32(value: i32) -> Option<Word> {
+    pub const fn from_i32(value: i32) -> Option<Self> {
         if value >= 0 {
-            Word::from_sign_u32(Sign::Plus, value as u32)
+            Self::from_sign_u32(Sign::Plus, value as u32)
         } else {
-            Word::from_sign_u32(Sign::Minus, -value as u32)
+            Self::from_sign_u32(Sign::Minus, -value as u32)
         }
     }
 
@@ -871,13 +906,15 @@ impl Word {
     /// assert_eq!(unsafe { Word::from_i32_unchecked(0) }, Word::POS_ZERO);
     /// assert_eq!(unsafe { Word::from_i32_unchecked(0) }.sign(), Sign::Plus);
     /// ```
-    pub const unsafe fn from_i32_unchecked(value: i32) -> Word {
-        debug_assert!(value.unsigned_abs() <= Word::VALUE_MASK);
+    pub const unsafe fn from_i32_unchecked(value: i32) -> Self {
+        debug_assert!(value.unsigned_abs() <= Self::VALUE_MASK);
+
+        // SAFETY: Preconditions are that `value` has a valid magnitude.
         unsafe {
             if value >= 0 {
-                Word::from_sign_u32_unchecked(Sign::Plus, value as u32)
+                Self::from_sign_u32_unchecked(Sign::Plus, value as u32)
             } else {
-                Word::from_sign_u32_unchecked(Sign::Minus, -value as u32)
+                Self::from_sign_u32_unchecked(Sign::Minus, -value as u32)
             }
         }
     }
@@ -908,10 +945,10 @@ impl Word {
     ///     None
     /// );
     /// ```
-    pub const fn from_sign_u32(sign: Sign, magnitude: u32) -> Option<Word> {
-        if magnitude <= Word::VALUE_MASK {
+    pub const fn from_sign_u32(sign: Sign, magnitude: u32) -> Option<Self> {
+        if magnitude <= Self::VALUE_MASK {
             // SAFETY: Ensured that magnitude is valid.
-            Some(unsafe { Word::from_sign_u32_unchecked(sign, magnitude) })
+            Some(unsafe { Self::from_sign_u32_unchecked(sign, magnitude) })
         } else {
             None
         }
@@ -937,9 +974,9 @@ impl Word {
     pub const unsafe fn from_sign_u32_unchecked(
         sign: Sign,
         magnitude: u32,
-    ) -> Word {
-        debug_assert!(magnitude <= Word::VALUE_MASK);
-        Word(((sign as u32) << 30) | magnitude)
+    ) -> Self {
+        debug_assert!(magnitude <= Self::VALUE_MASK);
+        Self(((sign as u32) << Self::BITS) | magnitude)
     }
 
     /// Converts a sign/bytes representation to a [`Word`].
@@ -957,15 +994,15 @@ impl Word {
     ///     word![-, 1, 2, 3, 4, 5]
     /// );
     /// ```
-    pub const fn from_sign_bytes(sign: Sign, bytes: [Byte; 5]) -> Word {
-        let signbit = (sign as u32) << 30;
-        let value = (bytes[0].0 as u32) << 24
-            | (bytes[1].0 as u32) << 18
-            | (bytes[2].0 as u32) << 12
-            | (bytes[3].0 as u32) << 6
-            | (bytes[4].0 as u32);
+    pub const fn from_sign_bytes(sign: Sign, bytes: [Byte; 5]) -> Self {
+        let signbit = (sign as u32) << Self::BITS;
+        let value = (bytes[0].0 as u32) << 4 * Byte::BITS
+            | (bytes[1].0 as u32) << 3 * Byte::BITS
+            | (bytes[2].0 as u32) << 2 * Byte::BITS
+            | (bytes[3].0 as u32) << 1 * Byte::BITS
+            | (bytes[4].0 as u32) << 0 * Byte::BITS;
 
-        Word(signbit | value)
+        Self(signbit | value)
     }
 
     /// Converts a [`Word`] to its sign/bytes representation.
@@ -1002,7 +1039,11 @@ impl Word {
     /// assert_eq!(Word::MIN.sign(), Sign::Minus);
     /// ```
     pub const fn sign(self) -> Sign {
-        unsafe { mem::transmute(((self.mask_sign()) >> 30) as u8) }
+        let bit = (self.mask_sign() >> Self::BITS) as u8;
+
+        // SAFETY: `bit`, the shifted sign of `self`, is now either `0` or `1`
+        // and thus a valid `Sign`.
+        unsafe { mem::transmute(bit) }
     }
 
     /// Returns the magnitude of `self`.
@@ -1037,11 +1078,11 @@ impl Word {
     /// ```
     pub const fn bytes(self) -> [Byte; 5] {
         [
-            Byte((self.0 >> 24) as u8 & Byte::VALUE_MASK),
-            Byte((self.0 >> 18) as u8 & Byte::VALUE_MASK),
-            Byte((self.0 >> 12) as u8 & Byte::VALUE_MASK),
-            Byte((self.0 >> 6) as u8 & Byte::VALUE_MASK),
-            Byte(self.0 as u8 & Byte::VALUE_MASK),
+            Byte((self.0 >> 4 * Byte::BITS) as u8 & Byte::VALUE_MASK),
+            Byte((self.0 >> 3 * Byte::BITS) as u8 & Byte::VALUE_MASK),
+            Byte((self.0 >> 2 * Byte::BITS) as u8 & Byte::VALUE_MASK),
+            Byte((self.0 >> 1 * Byte::BITS) as u8 & Byte::VALUE_MASK),
+            Byte((self.0 >> 0 * Byte::BITS) as u8 & Byte::VALUE_MASK),
         ]
     }
 
@@ -1117,6 +1158,21 @@ impl Word {
         self.mask_sign() != 0 && self.mask_value() != 0
     }
 
+    /// Returns `true` is `self` is even and `false` otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use mixlib::{word, num::Word};
+    ///
+    /// // Even
+    /// assert!(word!(10).is_even());
+    /// assert!(Word::POS_ZERO.is_even());
+    /// assert!(Word::NEG_ZERO.is_even());
+    ///
+    /// // Odd
+    /// assert!(!word!(9).is_even());
+    /// ```
     pub const fn is_even(self) -> bool {
         self.0 & 1 == 0
     }
@@ -1151,7 +1207,7 @@ impl Word {
     /// assert_eq!(word!(1).checked_add(word!(-1)).unwrap().sign(), Sign::Plus);
     /// assert_eq!(word!(-1).checked_add(word!(1)).unwrap().sign(), Sign::Minus);
     /// ```
-    pub const fn checked_add(self, rhs: Word) -> Option<Word> {
+    pub const fn checked_add(self, rhs: Self) -> Option<Self> {
         let (res, overflow) = self.overflowing_add(rhs);
         if overflow { None } else { Some(res) }
     }
@@ -1171,7 +1227,7 @@ impl Word {
     /// assert_eq!(word!(1).checked_sub(word!(1)).unwrap().sign(), Sign::Plus);
     /// assert_eq!(word!(-1).checked_sub(word!(-1)).unwrap().sign(), Sign::Minus);
     /// ```
-    pub const fn checked_sub(self, rhs: Word) -> Option<Word> {
+    pub const fn checked_sub(self, rhs: Self) -> Option<Self> {
         let (res, overflow) = self.overflowing_sub(rhs);
         if overflow { None } else { Some(res) }
     }
@@ -1190,7 +1246,7 @@ impl Word {
     /// assert_eq!(word!(2).checked_mul(word!(3)), Some(word!(6)));
     /// assert_eq!(Word::MAX.checked_mul(word!(2)), None);
     /// ```
-    pub const fn checked_mul(self, rhs: Word) -> Option<Word> {
+    pub const fn checked_mul(self, rhs: Self) -> Option<Self> {
         let (res, overflow) = self.overflowing_mul(rhs);
         if overflow { None } else { Some(res) }
     }
@@ -1199,7 +1255,7 @@ impl Word {
     /// carry.
     ///
     /// If the result is zero, the sign of `self` is retained.
-    pub const fn overflowing_add(self, rhs: Word) -> (Word, bool) {
+    pub const fn overflowing_add(self, rhs: Self) -> (Self, bool) {
         let lhs_value = self.mask_value();
         let lhs_sign = self.mask_sign();
         let rhs_value = rhs.mask_value();
@@ -1207,8 +1263,8 @@ impl Word {
 
         if lhs_sign == rhs_sign {
             let added = lhs_value + rhs_value;
-            let res_value = added & Word::VALUE_MASK;
-            let overflow = added > Word::VALUE_MASK;
+            let res_value = added & Self::VALUE_MASK;
+            let overflow = added > Self::VALUE_MASK;
 
             (Word(lhs_sign | res_value), overflow)
         } else if lhs_value >= rhs_value {
@@ -1223,7 +1279,7 @@ impl Word {
     /// and carry.
     ///
     /// If the result is zero, the sign of `self` is retained.
-    pub const fn overflowing_sub(self, rhs: Word) -> (Word, bool) {
+    pub const fn overflowing_sub(self, rhs: Self) -> (Self, bool) {
         self.overflowing_add(rhs.const_neg())
     }
 
@@ -1231,7 +1287,7 @@ impl Word {
     /// and wether an overflow occurred.
     ///
     /// The sign of the result is `self.sign() * rhs.sign()`.
-    pub const fn overflowing_mul(self, rhs: Word) -> (Word, bool) {
+    pub const fn overflowing_mul(self, rhs: Self) -> (Self, bool) {
         let res_sign = self.mask_sign() ^ rhs.mask_sign();
 
         // Must promote to u64 to fit 60 bits.
@@ -1252,22 +1308,20 @@ impl Word {
     /// # Examples
     ///
     /// ```
-    /// use mixlib::{byte, word, num::Byte};
+    /// use mixlib::{field, word};
     ///
-    /// // (2:4) = 8 * 2 + 4 = 20
-    /// let field = byte!(20);
+    /// let field = field!(2:4);
     /// let value = word![-, 1, 2, 3, 4, 5];
     ///
-    /// assert_eq!(value.with_load(field), Some(word![+, 0, 0, 2, 3, 4]));
-    /// assert_eq!(value.with_load(Byte::MAX), None);
+    /// assert_eq!(value.with_load(field), word![+, 0, 0, 2, 3, 4]);
     /// ```
-    pub const fn with_load(self, field_spec: FieldSpec) -> Word {
+    pub const fn with_load(self, field_spec: FieldSpec) -> Self {
         let masks = field_spec.masks();
         let sign_bit =
             if field_spec.includes_sign() { self.mask_sign() } else { 0 };
         let value_bits = (self.0 & masks.bit_mask) >> masks.bit_offset;
 
-        Word(sign_bit | value_bits)
+        Self(sign_bit | value_bits)
     }
 
     /// Returns the value of `self` as if the value of `value` has been stored
@@ -1280,18 +1334,15 @@ impl Word {
     /// # Examples
     ///
     /// ```
-    /// use mixlib::{word, byte, num::Byte};
+    /// use mixlib::{field, word};
     ///
     /// let dest = word![+, 1, 2, 3, 4, 5];
     /// let value = word![-, 6, 7, 8, 9, 10];
+    /// let field = field!(0:3);
     ///
-    /// // (0:3) = 8 * 0 + 3 = 3
-    /// let field = byte!(3);
-    ///
-    /// assert_eq!(dest.with_store(value, field), Some(word![-, 8, 9, 10, 4, 5]));
-    /// assert_eq!(dest.with_store(value, Byte::MAX), None);
+    /// assert_eq!(dest.with_store(value, field), word![-, 8, 9, 10, 4, 5]);
     /// ```
-    pub const fn with_store(self, value: Word, field_spec: FieldSpec) -> Word {
+    pub const fn with_store(self, value: Self, field_spec: FieldSpec) -> Self {
         let masks = field_spec.masks();
         let sign_bit = if field_spec.includes_sign() {
             value.mask_sign()
@@ -1304,7 +1355,7 @@ impl Word {
 
         let old_value_bits = self.mask_value() & !masks.bit_mask;
 
-        Word(sign_bit | new_value_bits | old_value_bits)
+        Self(sign_bit | new_value_bits | old_value_bits)
     }
 
     /// Returns `self` as though its (0:2) field has been set by `value`.
@@ -1319,12 +1370,15 @@ impl Word {
     ///     word![-, 9, 10, 3, 4, 5]
     /// );
     /// ```
-    pub const fn with_address(self, value: Word) -> Word {
-        let sign_bit = value.mask_sign();
-        let high_two_bytes = (value.0 & ((1 << 12) - 1)) << 18;
-        let low_three_bytes = self.0 & ((1 << 18) - 1);
+    pub const fn with_address(self, value: Self) -> Self {
+        const LO2_MASK: u32 = (1 << 2 * Byte::BITS) - 1;
+        const LO3_MASK: u32 = (1 << 3 * Byte::BITS) - 1;
 
-        Word(sign_bit | high_two_bytes | low_three_bytes)
+        let sign_bit = value.mask_sign();
+        let hi2 = (value.0 & LO2_MASK) << 3 * Byte::BITS;
+        let lo3 = self.0 & LO3_MASK;
+
+        Self(sign_bit | hi2 | lo3)
     }
 
     /// Returns `self` as though its (3:3) field has been set by `value`.
@@ -1339,11 +1393,14 @@ impl Word {
     ///     word![+, 1, 2, 10, 4, 5]
     /// );
     /// ```
-    pub const fn with_index(self, value: Word) -> Word {
-        let third_byte = (value.0 & ((1 << 6) - 1)) << 12;
-        let other_bytes = self.0 & (((1 << 31) - 1) & !(0x3F << 12));
+    pub const fn with_index(self, value: Self) -> Self {
+        const BYTE1_MASK: u32 = (1 << Byte::BITS) - 1;
+        const BYTE3_MASK: u32 = BYTE1_MASK << 2 * Byte::BITS;
 
-        Word(third_byte | other_bytes)
+        let third_byte = (value.0 & BYTE1_MASK) << 2 * Byte::BITS;
+        let other_bits = self.0 & !BYTE3_MASK;
+
+        Word(third_byte | other_bits)
     }
 
     /// Returns `self` as though its (4:4) field has been set by `value`.
@@ -1359,10 +1416,13 @@ impl Word {
     /// );
     /// ```
     pub const fn with_field(self, value: Word) -> Word {
-        let fourth_byte = (value.0 & ((1 << 6) - 1)) << 6;
-        let other_bytes = self.0 & (((1 << 31) - 1) & !(0x3F << 6));
+        const BYTE1_MASK: u32 = (1 << Byte::BITS) - 1;
+        const BYTE2_MASK: u32 = BYTE1_MASK << Byte::BITS;
 
-        Word(fourth_byte | other_bytes)
+        let fourth_byte = (value.0 & BYTE1_MASK) << Byte::BITS;
+        let other_bits = self.0 & !BYTE2_MASK;
+
+        Word(fourth_byte | other_bits)
     }
 
     /// Returns `self` as though its (5:5) field has been set by `value`.
@@ -1378,12 +1438,12 @@ impl Word {
     /// );
     /// ```
     pub const fn with_opcode(self, value: Word) -> Word {
-        const BYTE_MASK: u32 = Byte::VALUE_MASK as u32;
+        const BYTE1_MASK: u32 = (1 << Byte::BITS) - 1;
 
-        let fifth_byte = value.0 & BYTE_MASK;
-        let other_bytes = self.0 & (Word::MASK & !BYTE_MASK);
+        let fifth_byte = value.0 & BYTE1_MASK;
+        let other_bits = self.0 & !BYTE1_MASK;
 
-        Word(fifth_byte | other_bytes)
+        Word(fifth_byte | other_bits)
     }
 
     pub const fn with_sign(self, sign: Sign) -> Word {
@@ -1407,13 +1467,6 @@ impl Word {
     const fn const_neg(self) -> Word {
         Word(self.0 ^ Word::SIGN_MASK)
     }
-
-    pub(crate) const fn truncate_to_short(self) -> Short {
-        let sign_bit = (self.mask_sign() >> 18) as u16;
-        let value_bits = (self.0 as u16) & Short::VALUE_MASK;
-
-        Short(sign_bit | value_bits)
-    }
 }
 
 impl_int_repr! {
@@ -1426,6 +1479,16 @@ impl_int_repr! {
     into = [i32, i64, i128],
     try_from = [u32, u64, u128, usize, i32, i64, i128, isize],
     try_into = [u8, u16, u32, u64, u128, usize, i8, i16, isize],
+}
+
+impl From<Short> for Word {
+    fn from(value: Short) -> Self {
+        let sign_bit =
+            (value.mask_sign() as u32) << (Word::BITS - Short::BITS);
+        let value_bits = value.mask_value() as u32;
+
+        Word(sign_bit | value_bits)
+    }
 }
 
 impl Neg for Word {
@@ -1484,7 +1547,7 @@ impl Decode for Word {
         if repr & !Word::MASK == 0 {
             Ok(Word(repr))
         } else {
-            Err(EncodingError::in_io_error())
+            Err(EncodingError(()).into())
         }
     }
 }
@@ -1575,7 +1638,7 @@ impl Encode for LocationCounter {
 impl Decode for LocationCounter {
     fn decode<R: io::Read>(r: R) -> io::Result<Self> {
         LocationCounter::from_usize(u16::decode(r)? as usize)
-            .ok_or_else(EncodingError::in_io_error)
+            .ok_or_else(|| EncodingError(()).into())
     }
 }
 
@@ -1587,22 +1650,24 @@ struct FieldSpecMasks {
 
 /// Lookup table for valid field specs.
 const FIELD_SPEC_MASKS: [Option<FieldSpecMasks>; 64] = {
-    let mut field_info = [None; 64];
+    let mut masks = [None; 64];
 
     let mut left = 0;
     while left < 8 {
         let mut right = 0;
         while right < 8 {
-            let index = left << 3 | right;
+            // Loop over all valid pairs.
             if left <= right && right <= 5 {
+                let index = (8 * left + right) as usize;
+
                 let byte_left = if left == 0 { 1 } else { left };
                 let byte_right = if right == 0 { 1 } else { right + 1 };
 
-                let bit_width = (byte_right - byte_left) * 6;
-                let bit_offset = (6 - byte_right) * 6;
+                let bit_width = (byte_right - byte_left) * Byte::BITS;
+                let bit_offset = (6 - byte_right) * Byte::BITS;
                 let bit_mask = ((1 << bit_width) - 1) << bit_offset;
 
-                field_info[index] = Some(FieldSpecMasks {
+                masks[index] = Some(FieldSpecMasks {
                     bit_mask,
                     bit_offset: bit_offset as u8,
                 });
@@ -1613,7 +1678,7 @@ const FIELD_SPEC_MASKS: [Option<FieldSpecMasks>; 64] = {
         left += 1;
     }
 
-    field_info
+    masks
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1635,7 +1700,7 @@ pub struct FieldSpec {
 impl FieldSpec {
     pub const fn from_parts(left: u8, right: u8) -> Option<Self> {
         if left <= right && right <= 5 {
-            Some(FieldSpec { byte: left << 3 | right })
+            Some(FieldSpec { byte: 8 * left + right })
         } else {
             None
         }
