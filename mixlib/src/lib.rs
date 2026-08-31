@@ -16,9 +16,11 @@ pub mod num;
 pub mod source;
 pub mod symbol;
 
+extern crate self as mixlib;
+
 #[doc(hidden)]
 pub mod __private {
-    pub use mixlib_macros::{__byte, __short, __word};
+    pub use mixlib_macros::{__byte, __field, __short, __word};
 }
 
 /// Create a [`Byte`] constant expression.
@@ -52,7 +54,7 @@ pub mod __private {
 #[macro_export]
 macro_rules! byte {
     ($($tt:tt)*) => {
-        $crate::__private::__byte!($crate, $($tt)*)
+        $crate::__private::__byte!($($tt)*)
     };
 }
 
@@ -98,7 +100,7 @@ macro_rules! byte {
 #[macro_export]
 macro_rules! short {
     ($($tt:tt)*) => {
-        $crate::__private::__short!($crate, $($tt)*)
+        $crate::__private::__short!($($tt)*)
     };
 }
 
@@ -144,7 +146,17 @@ macro_rules! short {
 #[macro_export]
 macro_rules! word {
     ($($tt:tt)*) => {
-        $crate::__private::__word!($crate, $($tt)*)
+        $crate::__private::__word!($($tt)*)
+    };
+}
+
+/// Create a [`FieldSpec`] constant expression.
+///
+/// [`FieldSpec`]: num::FieldSpec
+#[macro_export]
+macro_rules! field {
+    ($($tt:tt)*) => {
+        $crate::__private::__field!($($tt)*)
     };
 }
 
