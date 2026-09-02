@@ -4,6 +4,7 @@ use std::{fmt, mem};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use crate::asm::Program;
 use crate::dev::DeviceUnit;
 use crate::emu::Machine;
 use crate::mem::MemoryAddress;
@@ -15,10 +16,6 @@ struct BreakpointIdFactory {
 }
 
 impl BreakpointIdFactory {
-    fn new() -> Self {
-        Self { next_id: 0 }
-    }
-
     fn next(&mut self) -> BreakpointId {
         let inner = self.next_id;
         self.next_id.checked_add(1).unwrap();
@@ -41,14 +38,14 @@ impl BreakpointId {
 pub enum BreakpointKind {
     // Breakpoints.
     MemoryLocation { location: Short },
-    SourceLocation { line: u64 },
+    SourceLocation { line: usize },
 
     // Data breakpoints.
-    MemRead { address: MemoryAddress },
-    MemWrite { address: MemoryAddress },
+    MemLoad { address: MemoryAddress },
+    MemStore { address: MemoryAddress },
     MemAccess { address: MemoryAddress },
-    IoRead { unit: DeviceUnit },
-    IoWrite { unit: DeviceUnit },
+    IoInput { unit: DeviceUnit },
+    IoOutput { unit: DeviceUnit },
     IoControl { unit: DeviceUnit },
     IoAccess { unit: DeviceUnit },
 }
@@ -74,17 +71,9 @@ struct BreakpointData {
 
 impl fmt::Debug for BreakpointData {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        struct Condition<'a>(&'a dyn BreakpointCondition);
-
-        impl fmt::Debug for Condition<'_> {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.debug_struct("dyn BreakpointCondition").finish()
-            }
-        }
-
         f.debug_struct("BreakpointData")
             .field("kind", &self.kind)
-            .field("condition", &Condition(self.condition.as_ref()))
+            .field("condition", &"Box<dyn BreakpointCondition>")
             .field("is_enabled", &self.is_enabled)
             .finish()
     }
@@ -190,6 +179,10 @@ impl<K: Eq + Hash> BreakpointTrackingMap<K> {
     {
         self.inner.get(k).into_iter().flatten().copied()
     }
+
+    fn clear(&mut self) {
+        self.inner.clear()
+    }
 }
 
 impl<K: Eq + Hash> Default for BreakpointTrackingMap<K> {
@@ -201,6 +194,7 @@ impl<K: Eq + Hash> Default for BreakpointTrackingMap<K> {
 #[derive(Debug, Default)]
 pub(super) struct BreakpointManager {
     id_factory: BreakpointIdFactory,
+    // Zero indexed line numbers to memory addresses.
     source_map: FxHashMap<usize, MemoryAddress>,
     needs_tracking_update: bool,
 
@@ -210,20 +204,22 @@ pub(super) struct BreakpointManager {
     prev_active_breakpoints: FxHashSet<BreakpointId>,
 
     location_tracking: BreakpointTrackingMap<Short>,
-    mem_read_tracking: BreakpointTrackingMap<MemoryAddress>,
-    mem_write_tracking: BreakpointTrackingMap<MemoryAddress>,
-    io_read_tracking: BreakpointTrackingMap<DeviceUnit>,
-    io_write_tracking: BreakpointTrackingMap<DeviceUnit>,
+    mem_load_tracking: BreakpointTrackingMap<MemoryAddress>,
+    mem_store_tracking: BreakpointTrackingMap<MemoryAddress>,
+    io_input_tracking: BreakpointTrackingMap<DeviceUnit>,
+    io_output_tracking: BreakpointTrackingMap<DeviceUnit>,
     io_control_tracking: BreakpointTrackingMap<DeviceUnit>,
 }
 
 impl BreakpointManager {
-    pub fn new() -> Self {
-        Default::default()
-    }
+    pub fn load_program(&mut self, program: &Program) {
+        self.source_map = program
+            .debug_info()
+            .source_map()
+            .iter()
+            .map(|entry| (entry.line_no(), entry.address()))
+            .collect();
 
-    pub fn set_source_map(&mut self, value: FxHashMap<usize, MemoryAddress>) {
-        self.source_map = value;
         self.needs_tracking_update = true;
     }
 
@@ -234,6 +230,7 @@ impl BreakpointManager {
     ) -> BreakpointId {
         let id = self.id_factory.next();
         self.breakpoints.add(id, kind, condition);
+        self.needs_tracking_update = true;
         id
     }
 
@@ -242,7 +239,16 @@ impl BreakpointManager {
     }
 
     pub fn clear_breakpoints(&mut self) {
-        todo!();
+        self.breakpoints.clear();
+        self.active_breakpoints.clear();
+        self.prev_active_breakpoints.clear();
+        self.location_tracking.clear();
+        self.mem_load_tracking.clear();
+        self.mem_store_tracking.clear();
+        self.io_input_tracking.clear();
+        self.io_output_tracking.clear();
+        self.io_control_tracking.clear();
+        self.needs_tracking_update = false;
     }
 
     pub fn get_breakpoint(
@@ -282,16 +288,49 @@ impl BreakpointManager {
         !self.active_breakpoints.is_empty()
     }
 
-    pub fn is_active(&self, id: BreakpointId) -> bool {
-        self.active_breakpoints.contains(&id)
-    }
-
     pub fn needs_tracking_update(&self) -> bool {
         self.needs_tracking_update
     }
 
     pub fn update_tracking(&mut self) {
         debug_assert!(self.needs_tracking_update);
+
+        for bp in self.breakpoints.iter() {
+            match bp.kind() {
+                BreakpointKind::MemoryLocation { location } => {
+                    self.location_tracking.insert(*location, bp.id())
+                }
+                BreakpointKind::SourceLocation { line } => {
+                    if let Some(&location) = self.source_map.get(line) {
+                        self.location_tracking.insert(location.into(), bp.id())
+                    }
+                }
+                BreakpointKind::MemLoad { address } => {
+                    self.mem_load_tracking.insert(*address, bp.id())
+                }
+                BreakpointKind::MemStore { address } => {
+                    self.mem_store_tracking.insert(*address, bp.id());
+                }
+                BreakpointKind::MemAccess { address } => {
+                    self.mem_load_tracking.insert(*address, bp.id());
+                    self.mem_store_tracking.insert(*address, bp.id());
+                }
+                BreakpointKind::IoInput { unit } => {
+                    self.io_input_tracking.insert(*unit, bp.id());
+                }
+                BreakpointKind::IoOutput { unit } => {
+                    self.io_output_tracking.insert(*unit, bp.id());
+                }
+                BreakpointKind::IoControl { unit } => {
+                    self.io_control_tracking.insert(*unit, bp.id());
+                }
+                BreakpointKind::IoAccess { unit } => {
+                    self.io_input_tracking.insert(*unit, bp.id());
+                    self.io_output_tracking.insert(*unit, bp.id());
+                    self.io_control_tracking.insert(*unit, bp.id());
+                }
+            }
+        }
     }
 }
 
@@ -309,10 +348,10 @@ macro_rules! define_track_fn {
 }
 
 impl BreakpointManager {
-    define_track_fn!(track_mem_read, MemoryAddress, mem_read_tracking);
-    define_track_fn!(track_mem_write, MemoryAddress, mem_write_tracking);
-    define_track_fn!(track_io_read, DeviceUnit, io_read_tracking);
-    define_track_fn!(track_io_write, DeviceUnit, io_write_tracking);
+    define_track_fn!(track_mem_load, MemoryAddress, mem_load_tracking);
+    define_track_fn!(track_mem_store, MemoryAddress, mem_store_tracking);
+    define_track_fn!(track_io_input, DeviceUnit, io_input_tracking);
+    define_track_fn!(track_io_output, DeviceUnit, io_output_tracking);
     define_track_fn!(track_io_control, DeviceUnit, io_control_tracking);
 
     pub fn track_location(&mut self, machine: &Machine, value: Short) {

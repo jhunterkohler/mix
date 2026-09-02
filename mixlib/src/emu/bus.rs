@@ -5,68 +5,16 @@ use crate::mem::{Memory, MemoryAddress, MemoryRange};
 use crate::num::{FieldSpec, Short, Word};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum InvalidDeviceOpError {
-    OutputUnsupported,
-    InputUnsupported,
-    BlockOutOfBounds,
+enum DeviceOpKind {
+    Control,
+    Input(MemoryRange),
+    Output(MemoryRange),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DeviceOpKind {
-    Control(Short),
-    Input(MemoryAddress),
-    Output(MemoryAddress),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DeviceOp {
+struct DeviceOp {
     unit: DeviceUnit,
     kind: DeviceOpKind,
-}
-
-impl DeviceOp {
-    pub fn try_new(
-        unit: DeviceUnit,
-        kind: DeviceOpKind,
-    ) -> Result<Self, InvalidDeviceOpError> {
-        match kind {
-            DeviceOpKind::Input(start) | DeviceOpKind::Output(start)
-                if MemoryRange::try_new(start, unit.kind().block_size())
-                    .is_err() =>
-            {
-                Err(InvalidDeviceOpError::BlockOutOfBounds)
-            }
-            DeviceOpKind::Input(_) if !unit.kind().supports_input() => {
-                Err(InvalidDeviceOpError::InputUnsupported)
-            }
-            DeviceOpKind::Output(_) if !unit.kind().supports_output() => {
-                Err(InvalidDeviceOpError::OutputUnsupported)
-            }
-            _ => Ok(DeviceOp { unit, kind }),
-        }
-    }
-
-    pub fn unit(&self) -> DeviceUnit {
-        self.unit
-    }
-
-    pub fn kind(&self) -> DeviceOpKind {
-        self.kind
-    }
-
-    pub fn range(&self) -> MemoryRange {
-        match self.kind() {
-            DeviceOpKind::Control(_) => unsafe {
-                MemoryRange::new_unchecked(MemoryAddress::MIN, 0)
-            },
-            DeviceOpKind::Input(base) => unsafe {
-                MemoryRange::new_unchecked(base, self.unit.kind().block_size())
-            },
-            DeviceOpKind::Output(base) => unsafe {
-                MemoryRange::new_unchecked(base, self.unit.kind().block_size())
-            },
-        }
-    }
 }
 
 #[derive(Debug, Default)]
@@ -104,25 +52,65 @@ impl DeviceOpList {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NoDeviceError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum StartOpError {
-    NoDevice,
-    MemoryAccess(MemoryAccessError),
+pub struct ReadConflictError {
+    pub unit: DeviceUnit,
 }
 
-impl From<NoDeviceError> for StartOpError {
+pub struct WriteConflictError {
+    pub unit: DeviceUnit,
+}
+
+pub enum StartInputError {
+    NoDevice,
+    WriteConflict(DeviceUnit),
+}
+
+impl From<NoDeviceError> for StartInputError {
     fn from(_value: NoDeviceError) -> Self {
-        StartOpError::NoDevice
+        StartInputError::NoDevice
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum MemoryAccessError {
+impl From<WriteConflictError> for StartInputError {
+    fn from(value: WriteConflictError) -> Self {
+        StartInputError::WriteConflict(value.unit)
+    }
+}
+
+pub enum StartOutputError {
+    NoDevice,
+    ReadConflict(DeviceUnit),
+}
+
+impl From<NoDeviceError> for StartOutputError {
+    fn from(_value: NoDeviceError) -> Self {
+        StartOutputError::NoDevice
+    }
+}
+
+impl From<ReadConflictError> for StartOutputError {
+    fn from(value: ReadConflictError) -> Self {
+        StartOutputError::ReadConflict(value.unit)
+    }
+}
+
+pub enum MemMoveError {
     ReadConflict(DeviceUnit),
     WriteConflict(DeviceUnit),
+}
+
+impl From<ReadConflictError> for MemMoveError {
+    fn from(value: ReadConflictError) -> Self {
+        MemMoveError::ReadConflict(value.unit)
+    }
+}
+
+impl From<WriteConflictError> for MemMoveError {
+    fn from(value: WriteConflictError) -> Self {
+        MemMoveError::WriteConflict(value.unit)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -133,8 +121,12 @@ pub struct Bus {
 }
 
 impl Bus {
-    pub fn new() -> Self {
-        Default::default()
+    pub fn new(devices: Option<DeviceList>) -> Self {
+        Self {
+            devices: devices.unwrap_or_default(),
+            device_ops: Default::default(),
+            memory: Memory::default(),
+        }
     }
 
     pub fn memory(&self) -> &Memory {
@@ -180,67 +172,82 @@ impl Bus {
         Ok(self.devices.get(unit).ok_or(NoDeviceError)?.is_ready())
     }
 
-    pub fn start_device_op(
+    pub fn start_ioc(
         &mut self,
-        memory: &mut Memory,
-        op: DeviceOp,
+        unit: DeviceUnit,
+        arg: Short,
         block: Word,
-    ) -> Result<(), StartOpError> {
-        let (dev, ops) = self.make_ready(memory, op.unit)?;
+    ) -> Result<(), NoDeviceError> {
+        self.wait(unit)?;
 
         unsafe {
-            match op.kind() {
-                DeviceOpKind::Control(arg) => dev.control(arg, block),
-                DeviceOpKind::Input(_) => {
-                    dev.buf_mut().copy_from_slice(&memory[op.range()]);
-                    dev.input(block);
-                }
-                DeviceOpKind::Output(_) => {
-                    dev.output(block);
-                }
-            }
+            let dev = self.devices.get_mut(unit).unwrap();
+            dev.control(arg, block)
         }
 
-        ops.add_op(op);
+        self.device_ops.add_op(DeviceOp { unit, kind: DeviceOpKind::Control });
         Ok(())
     }
 
-    // pub fn wait(
-    //     &mut self,
-    //     memory: &mut Memory,
-    //     unit: DeviceUnit,
-    // ) -> Result<(), NoDeviceError> {
-    //     self.make_ready(memory, unit)?;
-    //     Ok(())
-    // }
+    pub fn start_input(
+        &mut self,
+        unit: DeviceUnit,
+        range: MemoryRange,
+        block: Word,
+    ) -> Result<(), StartInputError> {
+        self.wait(unit)?;
+        self.check_write(range)?;
 
-    // pub fn wait_all(&mut self, memory: &mut Memory) {
-    //     for unit in DeviceUnit::iter() {
-    //         self.wait(memory, unit);
-    //     }
-    // }
+        unsafe {
+            let dev = self.devices.get_mut(unit).unwrap_unchecked();
+            dev.input(block);
+        }
 
-    // pub fn wait_and_ignore(
-    //     &mut self,
-    //     unit: DeviceUnit,
-    // ) -> Result<(), NoDeviceError> {
-    //     let dev = self.devices.get_mut(unit).ok_or(NoDeviceError(()))?;
-    //     dev.wait();
-    //     self.ops.remove_unit(unit);
-    //     Ok(())
-    // }
+        self.device_ops
+            .add_op(DeviceOp { unit, kind: DeviceOpKind::Input(range) });
+        Ok(())
+    }
 
-    // pub fn wait_and_ignore_all(&mut self) {
-    //     for unit in DeviceUnit::iter() {
-    //         self.wait_and_ignore(unit);
-    //     }
-    // }
+    pub fn start_output(
+        &mut self,
+        unit: DeviceUnit,
+        range: MemoryRange,
+        block: Word,
+    ) -> Result<(), StartOutputError> {
+        self.wait(unit)?;
+        self.check_read(range)?;
+
+        unsafe {
+            let dev = self.devices.get_mut(unit).unwrap_unchecked();
+            dev.buf_mut().copy_from_slice(&self.memory[range]);
+            dev.output(block);
+        }
+
+        self.device_ops
+            .add_op(DeviceOp { unit, kind: DeviceOpKind::Output(range) });
+        Ok(())
+    }
+
+    pub fn wait(&mut self, unit: DeviceUnit) -> Result<(), NoDeviceError> {
+        let dev = self.devices.get_mut(unit).ok_or(NoDeviceError)?;
+        dev.wait();
+
+        if let Some((pos, op)) = self.device_ops.unit_pos_op(unit) {
+            if let DeviceOpKind::Input(range) = op.kind {
+                self.memory[range].copy_from_slice(unsafe { dev.buf() });
+            }
+
+            self.device_ops.remove_pos(pos);
+        }
+
+        Ok(())
+    }
 
     pub fn try_mem_read(
         &self,
         address: MemoryAddress,
         field_spec: impl Into<Option<FieldSpec>>,
-    ) -> Result<Word, MemoryAccessError> {
+    ) -> Result<Word, ReadConflictError> {
         self.check_read(address)?;
         Ok(self.memory.load(address, field_spec))
     }
@@ -250,46 +257,46 @@ impl Bus {
         address: MemoryAddress,
         value: Word,
         field_spec: impl Into<Option<FieldSpec>>,
-    ) -> Result<(), MemoryAccessError> {
+    ) -> Result<(), WriteConflictError> {
         self.check_write(address)?;
         Ok(self.memory.store(address, value, field_spec))
     }
 
-    fn make_ready(
+    pub fn try_mem_move(
         &mut self,
-        memory: &mut Memory,
-        unit: DeviceUnit,
-    ) -> Result<(&mut dyn Device, &mut DeviceOpList), NoDeviceError> {
-        let dev = self.devices.get_mut(unit).ok_or(NoDeviceError)?;
-        dev.wait();
+        src: MemoryRange,
+        dest: MemoryRange,
+    ) -> Result<(), MemMoveError> {
+        self.check_read(src)?;
+        self.check_write(dest)?;
 
-        if let Some((pos, op)) = self.device_ops.unit_pos_op(unit) {
-            if let DeviceOpKind::Input(start) = op.kind() {
-                let range =
-                    MemoryRange::try_new(start, op.unit().kind().block_size())
-                        .unwrap();
+        self.memory
+            .as_mut_slice()
+            .copy_within(src.to_range_usize(), dest.start.to_usize());
 
-                memory[range].copy_from_slice(unsafe { dev.buf() });
-            }
+        Ok(())
+    }
 
-            self.device_ops.remove_pos(pos);
-        }
-
-        Ok((dev, &mut self.device_ops))
+    pub fn reset(&mut self) {
+        todo!();
     }
 
     fn check_read(
         &self,
         range: impl Into<MemoryRange>,
-    ) -> Result<(), MemoryAccessError> {
-        let range = range.into();
+    ) -> Result<(), ReadConflictError> {
+        let r1 = range.into();
 
         for op in self.device_ops.iter() {
-            match op.kind() {
-                DeviceOpKind::Output(_)
-                    if op.range().is_overlapping(&range) =>
+            match op.kind {
+                DeviceOpKind::Output(r2)
+                    if r1.is_overlapping(&r2)
+                        && self
+                            .devices
+                            .get(op.unit)
+                            .is_some_and(|dev| !dev.is_ready()) =>
                 {
-                    return Err(MemoryAccessError::ReadConflict(op.unit()));
+                    return Err(ReadConflictError { unit: op.unit });
                 }
                 _ => {}
             }
@@ -301,15 +308,19 @@ impl Bus {
     fn check_write(
         &self,
         range: impl Into<MemoryRange>,
-    ) -> Result<(), MemoryAccessError> {
-        let range = range.into();
+    ) -> Result<(), WriteConflictError> {
+        let r1 = range.into();
 
         for op in self.device_ops.iter() {
-            match op.kind() {
-                DeviceOpKind::Input(_) | DeviceOpKind::Output(_)
-                    if op.range().is_overlapping(&range) =>
+            match op.kind {
+                DeviceOpKind::Input(r2) | DeviceOpKind::Output(r2)
+                    if r1.is_overlapping(&r2)
+                        && self
+                            .devices
+                            .get(op.unit)
+                            .is_some_and(|dev| !dev.is_ready()) =>
                 {
-                    return Err(MemoryAccessError::WriteConflict(op.unit()));
+                    return Err(WriteConflictError { unit: op.unit });
                 }
                 _ => {}
             }
