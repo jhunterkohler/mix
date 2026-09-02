@@ -77,6 +77,9 @@ const SHORT_MIN: i128 = -SHORT_MAX;
 const WORD_MAX: i128 = (1 << 30) - 1;
 const WORD_MIN: i128 = -WORD_MAX;
 
+/// Parse a ranged, unsuffixed, integer. The max is used for bounding (since
+/// signs are not supported), but both min and max are used for error
+/// reporting.
 fn parse_ranged_int(
     input: ParseStream,
     name: &str,
@@ -109,12 +112,6 @@ impl Parse for ByteLit {
         let lit = parse_ranged_int(input, "MIX byte", BYTE_MIN, BYTE_MAX)?;
 
         Ok(Self { lit })
-    }
-}
-
-impl ByteLit {
-    fn span(&self) -> Span {
-        self.lit.span()
     }
 }
 
@@ -228,7 +225,7 @@ impl<const N: usize> Parse for ByteLitList<N> {
         } else {
             let span = parts
                 .first()
-                .map(ByteLit::span)
+                .map(|bl| bl.lit.span())
                 .unwrap_or_else(Span::call_site);
 
             Err(Error::new(span, format!("expected {N} bytes")))
@@ -406,7 +403,7 @@ impl ToTokens for FieldPartsLit {
 
         let stream = quote_spanned! {
             span => const {
-                #path::num::FieldSpec::from_parts(#left, #right).unwrap()
+                #path::num::FieldSpec::from_parts(#left #sep #right).unwrap()
             }
         };
 
