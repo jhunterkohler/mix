@@ -76,7 +76,7 @@ impl Encode for MemoryAddress {
 impl Decode for MemoryAddress {
     fn decode<R: io::Read>(r: R) -> io::Result<Self> {
         MemoryAddress::from_usize(u16::decode(r)? as usize)
-            .ok_or_else(EncodingError::in_io_error)
+            .ok_or_else(|| EncodingError(()).into())
     }
 }
 
@@ -138,14 +138,6 @@ impl MemoryRange {
         let start = self.start.to_usize();
         let end = start + self.len();
         start..end
-    }
-
-    fn is_valid(start: MemoryAddress, len: usize) -> bool {
-        if let Some(sum) = start.to_usize().checked_add(len) {
-            sum <= Memory::LEN
-        } else {
-            false
-        }
     }
 }
 
