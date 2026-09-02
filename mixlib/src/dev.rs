@@ -34,11 +34,6 @@ use crate::char::Char;
 use crate::num::Sign;
 use crate::num::{Byte, Short, Word};
 
-/// Number of bytes used to encode one [`Word`] in the binary format used by
-/// [`Tape`] and [`Disk`]. Block byte offsets are this many times a device's
-/// [`DeviceKind::block_size`].
-const WORD_ENCODED_LEN: usize = 4;
-
 /// Whether a [`DeviceKind`] transfers binary words or MIX characters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DeviceMode {
