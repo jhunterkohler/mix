@@ -1,8 +1,6 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use rustc_hash::FxHashMap;
-
 use crate::bin::*;
 use crate::char::Char;
 use crate::mem::{MemoryAddress, MemoryRange};
@@ -102,10 +100,50 @@ impl Decode for ProgramSection {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceMapEntry {
+    pub(super) address: MemoryAddress,
+    /// Zero indexed.
+    pub(super) line_no: usize,
+    pub(super) line_span: Span,
+}
+
+impl SourceMapEntry {
+    pub fn address(&self) -> MemoryAddress {
+        self.address
+    }
+
+    pub fn line_no(&self) -> usize {
+        self.line_no
+    }
+
+    pub fn line_span(&self) -> Span {
+        self.line_span
+    }
+}
+
+impl Encode for SourceMapEntry {
+    fn encode<W: io::Write>(&self, mut w: W) -> io::Result<()> {
+        self.address.encode(&mut w)?;
+        self.line_no.encode(&mut w)?;
+        self.line_span.encode(&mut w)
+    }
+}
+
+impl Decode for SourceMapEntry {
+    fn decode<R: io::Read>(mut r: R) -> io::Result<Self> {
+        Ok(Self {
+            address: Decode::decode(&mut r)?,
+            line_no: Decode::decode(&mut r)?,
+            line_span: Decode::decode(&mut r)?,
+        })
+    }
+}
+
 /// Debug info of a program.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProgramDebugInfo {
-    pub(super) source_map: FxHashMap<MemoryAddress, Span>,
+    pub(super) source_map: Vec<SourceMapEntry>,
     pub(super) source_path: Option<PathBuf>,
     pub(super) source_hash: u64,
     pub(super) symbols: Vec<SymbolDebugInfo>,
@@ -116,8 +154,8 @@ pub struct ProgramDebugInfo {
 }
 
 impl ProgramDebugInfo {
-    /// A map from memory addresses to the source lines.
-    pub fn source_map(&self) -> &FxHashMap<MemoryAddress, Span> {
+    /// A list of associations between memory addresses and lines.
+    pub fn source_map(&self) -> &[SourceMapEntry] {
         &self.source_map
     }
 
