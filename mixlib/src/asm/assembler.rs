@@ -5,6 +5,7 @@ use std::hash::{Hash, Hasher};
 use std::mem;
 use std::path::PathBuf;
 
+use line_index::LineIndex;
 use rustc_hash::FxHashMap;
 use siphasher::sip::SipHasher13;
 
@@ -474,8 +475,20 @@ impl<'a> Assembler<'a> {
                     .map(|(symbol, info)| info.into_debug_info(symbol)),
             );
 
+            let line_index = LineIndex::new(self.source);
+            let source_map = self
+                .source_map
+                .into_iter()
+                .map(|(address, line_span)| {
+                    let start = line_span.start.try_into().unwrap();
+                    let line_no = line_index.line_col(start).line as usize;
+
+                    SourceMapEntry { address, line_no, line_span }
+                })
+                .collect();
+
             ProgramDebugInfo {
-                source_map: self.source_map,
+                source_map,
                 source_path: self.source_path,
                 source_hash: hash_source(self.source),
                 symbols,
