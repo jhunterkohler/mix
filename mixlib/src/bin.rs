@@ -371,3 +371,29 @@ impl Decode for PathBuf {
         Ok(PathBuf::from(OsString::decode(r)?))
     }
 }
+
+macro_rules! impl_tuple_encoding {
+    ($($T:ident : $index:tt),+) => {
+        impl<$($T: Encode,)*> Encode for ($($T,)*) {
+            fn encode<W: io::Write>(&self, mut w: W) -> io::Result<()> {
+                $(self.$index.encode(&mut w)?;)*
+                Ok(())
+            }
+        }
+
+        impl<$($T: Decode,)*> Decode for ($($T,)*) {
+            fn decode<R: io::Read>(mut r: R) -> io::Result<Self> {
+                Ok((
+                    $(<$T as Decode>::decode(&mut r)?,)*
+                ))
+            }
+        }
+    };
+}
+
+impl_tuple_encoding! { T0:0 }
+impl_tuple_encoding! { T0:0, T1:1 }
+impl_tuple_encoding! { T0:0, T1:1, T2:2 }
+impl_tuple_encoding! { T0:0, T1:1, T2:2, T3:3 }
+impl_tuple_encoding! { T0:0, T1:1, T2:2, T3:3, T4:4 }
+impl_tuple_encoding! { T0:0, T1:1, T2:2, T3:3, T4:4, T5:5 }
