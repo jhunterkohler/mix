@@ -11,14 +11,14 @@ macro_rules! define_pseudo_op {
 
         impl PseudoOp {
             /// Mnuemonic string.
-            pub const fn as_str(&self) -> &'static str {
+            pub const fn as_str(self) -> &'static str {
                 match self {
                     $(PseudoOp::$name => stringify!($name),)*
                 }
             }
 
             /// Markdown documentation.
-            pub const fn docs(&self) -> &'static str {
+            pub const fn docs(self) -> &'static str {
                 match self {
                     $(PseudoOp::$name => $docs,)*
                 }
