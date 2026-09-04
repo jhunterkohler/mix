@@ -14,11 +14,11 @@ impl Keyword for asm::Op {
     }
 
     fn as_str(&self) -> &'static str {
-        self.as_str()
+        Self::as_str(*self)
     }
 
     fn docs(&self) -> &'static str {
-        self.docs()
+        Self::docs(*self)
     }
 }
 
@@ -28,10 +28,10 @@ impl Keyword for asm::PseudoOp {
     }
 
     fn as_str(&self) -> &'static str {
-        self.as_str()
+        Self::as_str(*self)
     }
 
     fn docs(&self) -> &'static str {
-        self.docs()
+        Self::docs(*self)
     }
 }
