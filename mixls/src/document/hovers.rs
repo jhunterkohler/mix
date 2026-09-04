@@ -107,8 +107,8 @@ impl<'a> Factory<'a> {
         let contents = format!(
             "{}\n---\nCode = `{}`, Field = `{}`, Time = `{}u`\n",
             op.docs(),
-            op.opcode().to_byte().to_u8(),
-            op.default_field().to_u8(),
+            op.opcode().to_byte(),
+            op.default_field(),
             op.execution_time(),
         );
 

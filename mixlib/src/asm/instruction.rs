@@ -264,6 +264,13 @@ macro_rules! define_inst {
                 }
             }
 
+            pub const fn default_field(self) -> Byte {
+                match self {
+                    $(Self::$name => const {
+                        Byte::from_u8($default_field).unwrap()})*
+                }
+            }
+
             pub fn iter() -> impl Iterator<Item = Self> {
                 const LEN: usize = [$(Op::$name,)*].len();
                 const ALL: [Op; LEN] = [$(Op::$name,)*];
